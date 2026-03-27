@@ -1,0 +1,7 @@
+python-telegram-bot
+yandex-music
+mutagen
+requests
+psutil
+syncedlyrics
+python-dotenv
