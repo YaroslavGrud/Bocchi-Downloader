@@ -30,23 +30,23 @@
 
 ### 1. Подготовка
 Склонируйте репозиторий и установите зависимости:
-bash
+```bash
 git clone https://github.com/YaroslavGrud/Bocchi-Downloader.git
 cd Bocchi-Downloader
 pip install -r requirements.txt
-
+```
 
 ### 2. Настройка
 Создайте файл `.env` в корневой папке и добавьте свой токен:
-env
+```env
 TELEGRAM_TOKEN=ваш_токен_бота
 DOWNLOADER_PATH=/путь/к/yandex-music-downloader
-
+```
 
 ### 3. Запуск
-bash
+```bash
 python main.py
-
+```
 
 ---
 
