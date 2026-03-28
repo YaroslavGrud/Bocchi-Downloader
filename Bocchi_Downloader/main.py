@@ -2,6 +2,9 @@
 # Проект "Bocchi Downloader"
 # Копирование и использование без разрешения автора запрещено.
 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import subprocess
 import asyncio
 import logging
@@ -15,9 +18,8 @@ import random
 import requests
 import urllib.parse
 from pathlib import Path
-from dotenv import load_dotenv
 
-import syncedlyrics
+import syncedlyrics  # не используется, но оставлен для возможного расширения
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
 from mutagen.mp3 import MP3
@@ -30,19 +32,16 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, filters, Application
 )
 
-# Загрузка настроек из .env
-load_dotenv()
-
+# --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(message)s')
 logger = logging.getLogger("BocchiStation")
 
-# --- КОНФИГУРАЦИЯ ИЗ ОКРУЖЕНИЯ ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")
+# --- КОНФИГУРАЦИЯ (загружается из переменных окружения) ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
+DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "/home/hanako/.local/bin/yandex-music-downloader")
 STATS_FILE = os.getenv("STATS_FILE", "stats.txt")
-MAX_LINKS = 10
-BOT_START_TIME = time.time()
-DOWNLOAD_TIMEOUT = 600  # 10 минут для загрузки трека в Telegram
+MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 
 # --- ГЛОБАЛЬНЫЕ ОБЪЕКТЫ ---
 download_semaphore = None
@@ -51,9 +50,9 @@ link_accumulators = {}
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
 
-# --- СЕТЕВОЙ ПОИСК МЕТАДАННЫХ ---
+# --- СЕТЕВОЙ ПОИСК МЕТАДАННЫХ (iTunes) ---
 def fetch_metadata_from_itunes(artist, title):
-    """Ищет дополнительную информацию о треке в базе iTunes (альбом, год, жанр, HQ обложка)"""
+    """Ищет дополнительную информацию о треке в iTunes (альбом, год, жанр, HQ обложка)"""
     try:
         query = urllib.parse.quote(f"{artist} {title}")
         url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=1"
@@ -63,15 +62,12 @@ def fetch_metadata_from_itunes(artist, title):
             data = resp.json()
             if data['resultCount'] > 0:
                 track = data['results'][0]
-
-                # Достаем обложку в высоком качестве (1000x1000)
                 cover_url = track.get('artworkUrl100', '').replace('100x100bb.jpg', '1000x1000bb.jpg')
                 cover_bytes = None
                 if cover_url:
                     cover_resp = requests.get(cover_url, timeout=10)
                     if cover_resp.status_code == 200:
                         cover_bytes = cover_resp.content
-
                 return {
                     'album': track.get('collectionName'),
                     'year': track.get('releaseDate', '')[:4],
@@ -85,17 +81,15 @@ def fetch_metadata_from_itunes(artist, title):
 
 # --- УТИЛИТЫ ---
 def cleanup_old_tmp_dirs():
-    current_dir = Path('.')
     count = 0
-    for tmp_dir in current_dir.glob('bocchi_tmp_*'):
+    for tmp_dir in Path('.').glob('bocchi_tmp_*'):
         if tmp_dir.is_dir():
             try:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 count += 1
             except Exception as e:
                 logger.error(f"Не удалось удалить папку {tmp_dir}: {e}")
-
-    if count > 0:
+    if count:
         print(f"🎸 Найдено и удалено забытых временных папок: {count}")
 
 
@@ -103,7 +97,8 @@ def add_stats(bytes_added):
     try:
         current = 0.0
         if os.path.exists(STATS_FILE):
-            with open(STATS_FILE, "r") as f: current = float(f.read())
+            with open(STATS_FILE, "r") as f:
+                current = float(f.read())
         with open(STATS_FILE, "w") as f:
             f.write(str(current + bytes_added))
     except:
@@ -112,11 +107,13 @@ def add_stats(bytes_added):
 
 def get_formatted_stats():
     try:
-        if not os.path.exists(STATS_FILE): return "0 Б"
+        if not os.path.exists(STATS_FILE):
+            return "0 Б"
         with open(STATS_FILE, "r") as f:
             bytes_val = float(f.read())
         for unit in ['Б', 'КБ', 'МБ', 'ГБ']:
-            if bytes_val < 1024.0: return f"{bytes_val:.2f} {unit}"
+            if bytes_val < 1024.0:
+                return f"{bytes_val:.2f} {unit}"
             bytes_val /= 1024.0
         return f"{bytes_val:.2f} ТБ"
     except:
@@ -154,7 +151,10 @@ def get_network_signal():
 
 def get_ping():
     try:
-        output = subprocess.check_output(["ping", "-c", "1", "-W", "1", "ya.ru"], stderr=subprocess.STDOUT, text=True)
+        output = subprocess.check_output(
+            ["ping", "-c", "1", "-W", "1", "ya.ru"],
+            stderr=subprocess.STDOUT, text=True
+        )
         match = re.search(r'time=([\d\.]+)', output)
         return float(match.group(1)) if match else 0.0
     except:
@@ -185,15 +185,19 @@ async def worker(app: Application):
                     text=f"🌀 Обработка...\n{task['track_name']}"
                 )
 
-                # Запускаем оригинальный загрузчик Яндекса (он сам вшивает базовые теги)
+                # Запускаем загрузчик с параметрами:
+                # --lyrics-format lrc — сохраняет синхронизированный текст
+                # --embed-cover — встраивает обложку (загрузчик сам)
                 cmd = [
                     DOWNLOADER_PATH, "--token", task['token'], "--quality", "2",
                     "--embed-cover", "--dir", str(tmp_dir), "--url", task['url'],
-                    "--path-pattern", "#artist - #title"
+                    "--path-pattern", "#artist - #title",
+                    "--lyrics-format", "lrc"
                 ]
 
-                proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE,
-                                                            stderr=asyncio.subprocess.PIPE)
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
 
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=DOWNLOAD_TIMEOUT)
@@ -212,118 +216,165 @@ async def worker(app: Application):
                 for f_path in files:
                     file_size_mb = f_path.stat().st_size / (1024 * 1024)
 
-                    # --- 1. ЧИТАЕМ БАЗОВЫЕ ДАННЫЕ ОТ ЯНДЕКСА ИЗ ФАЙЛА ---
-                    artist, title, duration = "Unknown", f_path.stem, 0
-                    try:
-                        if f_path.suffix == '.m4a':
-                            audio_read = MP4(f_path)
-                            artist = audio_read.get('\xa9ART', ['Unknown'])[0]
-                            title = audio_read.get('\xa9nam', [f_path.stem])[0]
-                            duration = int(audio_read.info.length)
-                        else:
-                            audio_t, audio_i = EasyID3(f_path), MP3(f_path)
-                            artist = audio_t.get('artist', ['Unknown'])[0]
-                            title = audio_t.get('title', [f_path.stem])[0]
-                            duration = int(audio_i.info.length)
-                    except Exception as e:
-                        logger.warning(f"Ошибка чтения данных от Яндекса: {e}")
+                    # --- 1. ИСПОЛЬЗУЕМ ДАННЫЕ ИЗ API, ПЕРЕДАННЫЕ В ЗАДАЧЕ ---
+                    artist = task.get('artist')
+                    title = task.get('title')
+                    duration = task.get('duration', 0)
 
-                    # Чистим данные от загрузчика Яндекса
-                    artist = artist.replace("#artist", "Unknown").strip()
-                    title = title.replace("#artist", "").replace("#title", "").strip(" -")
-                    if not artist: artist = "Unknown"
-                    if not title: title = "Unknown Track"
+                    # Если нет данных из API, читаем из файла (резерв)
+                    if not artist or not title:
+                        try:
+                            if f_path.suffix == '.m4a':
+                                audio_read = MP4(f_path)
+                                artist = audio_read.get('\xa9ART', ['Unknown'])[0]
+                                title = audio_read.get('\xa9nam', [f_path.stem])[0]
+                                if not duration:
+                                    duration = int(audio_read.info.length)
+                            else:
+                                audio_t, audio_i = EasyID3(f_path), MP3(f_path)
+                                artist = audio_t.get('artist', ['Unknown'])[0]
+                                title = audio_t.get('title', [f_path.stem])[0]
+                                if not duration:
+                                    duration = int(audio_i.info.length)
+                        except Exception as e:
+                            logger.warning(f"Ошибка чтения данных из файла: {e}")
+                            artist = "Unknown"
+                            title = f_path.stem
+
+                    # Чистим данные от загрузчика (только если читали из файла)
+                    if not task.get('artist'):
+                        artist = artist.replace("#artist", "Unknown").strip()
+                        title = title.replace("#artist", "").replace("#title", "").strip(" -")
+                        if not artist:
+                            artist = "Unknown"
+                        if not title:
+                            title = "Unknown Track"
 
                     display_name = f"{artist} — {title}"
 
-                    # --- 2. ИЩЕМ НЕДОСТАЮЩИЕ ДАННЫЕ В ИНТЕРНЕТЕ ---
-                    itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
-                    lyrics = await asyncio.to_thread(syncedlyrics.search, f"{artist} {title}")
-                    if lyrics:
-                        lyrics = re.sub(r'\[.*?\]', '', lyrics).strip()  # Убираем таймкоды
-
-                        # --- 3. ДОПИСЫВАЕМ НОВЫЕ ТЕГИ В ФАЙЛ ---
+                    # --- 2. ИЩЕМ LRC-ФАЙЛ С ТЕКСТОМ ПЕСНИ (с таймкодами) ---
+                    lyrics = None
+                    base_name = f_path.stem
+                    lrc_files = list(tmp_dir.glob(f"{base_name}.lrc"))
+                    if lrc_files:
+                        lrc_file = lrc_files[0]
                         try:
-                            if f_path.suffix.lower() == '.m4a':
-                                audio = MP4(f_path)
-                                audio['aART'] = [artist]  # Исполнитель альбома
-
-                                # Удаляем комментарий со ссылкой
-                                audio.pop('\xa9cmt', None)
-
-                                if itunes_data.get('album'): audio['\xa9alb'] = [itunes_data['album']]
-                                if itunes_data.get('year'): audio['\xa9day'] = [str(itunes_data['year'])]
-                                if itunes_data.get('genre'): audio['\xa9gen'] = [itunes_data['genre']]
-                                if lyrics: audio['\xa9lyr'] = [lyrics]
-                                if itunes_data.get('cover_bytes'):
-                                    audio['covr'] = [
-                                        MP4Cover(itunes_data['cover_bytes'], imageformat=MP4Cover.FORMAT_JPEG)]
-                                audio.save()
-                            else:
-                                audio = MP3(f_path, ID3=ID3)
-                                if audio.tags is None:
-                                    audio.add_tags()
-                                audio.tags.add(TPE2(encoding=3, text=artist))  # Исполнитель альбома
-
-                                # Удаляем все комментарии, которые оставил загрузчик
-                                audio.tags.delall('COMM')
-
-                                if itunes_data.get('album'): audio.tags.add(TALB(encoding=3, text=itunes_data['album']))
-                                if itunes_data.get('year'): audio.tags.add(
-                                    TDRC(encoding=3, text=str(itunes_data['year'])))
-                                if itunes_data.get('genre'): audio.tags.add(TCON(encoding=3, text=itunes_data['genre']))
-                                if lyrics: audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
-                                if itunes_data.get('cover_bytes'):
-                                    audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover',
-                                                        data=itunes_data['cover_bytes']))
-                                audio.save()
-                        except Exception as tag_e:
-                            logger.error(f"Не удалось записать дополнительные теги: {tag_e}")
-                        # --- 4. ПЕРЕИМЕНОВАНИЕ ФАЙЛА ДЛЯ БЕЗОПАСНОЙ ОТПРАВКИ ---
-                        safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
-                        new_f_path = f_path.with_name(safe_filename)
-
-                        try:
-                            f_path.rename(new_f_path)
-                            f_path = new_f_path
+                            with open(lrc_file, 'r', encoding='utf-8') as f:
+                                lyrics = f.read().strip()
+                            logger.info(f"LRC-текст найден в файле {lrc_file.name}")
                         except Exception as e:
-                            logger.error(f"Не удалось переименовать файл: {e}")
-                        # ------------------------------------------------------
+                            logger.warning(f"Ошибка чтения LRC-файла: {e}")
 
-                        if file_size_mb > 49.0:
-                            await status_msg.edit_text(
-                                f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Telegram такое не пропустит.\n"
-                                f"Перенаправляю на резервное облако...")
-                            try:
-                                with open(f_path, 'rb') as f:
-                                    resp = await asyncio.to_thread(requests.post, "https://catbox.moe/user/api.php",
-                                                                   data={"reqtype": "fileupload"},
-                                                                   files={"fileToUpload": f})
-                                if resp.status_code == 200:
-                                    await app.bot.send_message(
-                                        chat_id=task['chat_id'],
-                                        text=(
-                                            f"🎁 Telegram не может принять такой тяжелый файл, поэтому держи ссылку:\n\n"
-                                            f"🎵 {display_name}\n"
-                                            f"⚖️ Размер: {file_size_mb:.1f} МБ\n"
-                                            f"🔗 Скачать: {resp.text}"),
-                                        disable_web_page_preview=True
-                                    )
-                                else:
-                                    raise Exception()
-                            except:
-                                await app.bot.send_message(chat_id=task['chat_id'],
-                                                           text=f"❌ Ошибка загрузки {display_name} на облако.")
+                    # --- 3. ИЩЕМ НЕДОСТАЮЩИЕ ДАННЫЕ В ITUNES ---
+                    itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
+
+                    # --- 4. ДОПИСЫВАЕМ НОВЫЕ ТЕГИ В ФАЙЛ (включая LRC-текст) ---
+                    try:
+                        if f_path.suffix.lower() == '.m4a':
+                            audio = MP4(f_path)
+                            audio['aART'] = [artist]
+                            audio.pop('\xa9cmt', None)
+                            if itunes_data.get('album'): audio['\xa9alb'] = [itunes_data['album']]
+                            if itunes_data.get('year'): audio['\xa9day'] = [str(itunes_data['year'])]
+                            if itunes_data.get('genre'): audio['\xa9gen'] = [itunes_data['genre']]
+                            if lyrics: audio['\xa9lyr'] = [lyrics]   # LRC-текст (с таймкодами)
+                            if itunes_data.get('cover_bytes'):
+                                audio['covr'] = [MP4Cover(itunes_data['cover_bytes'], imageformat=MP4Cover.FORMAT_JPEG)]
+                            audio.save()
                         else:
+                            audio = MP3(f_path, ID3=ID3)
+                            if audio.tags is None:
+                                audio.add_tags()
+                            audio.tags.add(TPE2(encoding=3, text=artist))
+                            audio.tags.delall('COMM')
+                            if itunes_data.get('album'): audio.tags.add(TALB(encoding=3, text=itunes_data['album']))
+                            if itunes_data.get('year'): audio.tags.add(TDRC(encoding=3, text=str(itunes_data['year'])))
+                            if itunes_data.get('genre'): audio.tags.add(TCON(encoding=3, text=itunes_data['genre']))
+                            if lyrics:
+                                # Сохраняем LRC-текст как есть (с таймкодами) в USLT
+                                audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
+                            if itunes_data.get('cover_bytes'):
+                                audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover', data=itunes_data['cover_bytes']))
+                            audio.save()
+                    except Exception as tag_e:
+                        logger.error(f"Не удалось записать дополнительные теги: {tag_e}")
+
+                    # --- 5. ПЕРЕИМЕНОВАНИЕ ФАЙЛА ---
+                    safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
+                    new_f_path = f_path.with_name(safe_filename)
+
+                    try:
+                        f_path.rename(new_f_path)
+                        f_path = new_f_path
+                    except Exception as e:
+                        logger.error(f"rename не удался: {e}, пробуем shutil.move")
+                        try:
+                            shutil.move(str(f_path), str(new_f_path))
+                            f_path = new_f_path
+                        except Exception as move_e:
+                            logger.error(f"shutil.move тоже не сработал: {move_e}")
+                            await app.bot.send_message(chat_id=task['chat_id'],
+                                                       text=f"❌ Не удалось переименовать файл {display_name}.")
+                            continue
+
+                    if not f_path.exists():
+                        logger.error(f"Файл не найден после переименования: {f_path}")
+                        await app.bot.send_message(chat_id=task['chat_id'],
+                                                   text=f"❌ Не удалось найти файл {display_name}.")
+                        continue
+
+                    # --- 6. ОТПРАВКА ---
+                    if file_size_mb > 49.0:
+                        await status_msg.edit_text(
+                            f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Telegram такое не пропустит.\n"
+                            f"Перенаправляю на резервное облако...")
+                        try:
+                            with open(f_path, 'rb') as f:
+                                resp = await asyncio.to_thread(requests.post,
+                                    "https://catbox.moe/user/api.php",
+                                    data={"reqtype": "fileupload"},
+                                    files={"fileToUpload": f}
+                                )
+                            if resp.status_code == 200:
+                                await app.bot.send_message(
+                                    chat_id=task['chat_id'],
+                                    text=(
+                                        f"🎁 Telegram не может принять такой тяжелый файл, поэтому держи ссылку:\n\n"
+                                        f"🎵 {display_name}\n"
+                                        f"⚖️ Размер: {file_size_mb:.1f} МБ\n"
+                                        f"🔗 Скачать: {resp.text}"),
+                                    disable_web_page_preview=True
+                                )
+                            else:
+                                raise Exception(f"HTTP {resp.status_code}")
+                        except Exception as e:
+                            logger.error(f"Ошибка загрузки на облако: {e}")
+                            await app.bot.send_message(chat_id=task['chat_id'],
+                                                       text=f"❌ Ошибка загрузки {display_name} на облако.")
+                    else:
+                        try:
                             with open(f_path, 'rb') as f:
                                 await app.bot.send_audio(
-                                    chat_id=task['chat_id'], audio=f,
-                                    performer=artist, title=title, duration=duration,
-                                    read_timeout=600, write_timeout=600, connect_timeout=600, pool_timeout=600
+                                    chat_id=task['chat_id'],
+                                    audio=f,
+                                    performer=artist,
+                                    title=title,
+                                    duration=duration,
+                                    filename=safe_filename,
+                                    read_timeout=600,
+                                    write_timeout=600,
+                                    connect_timeout=600,
+                                    pool_timeout=600
                                 )
+                            logger.info(f"Успешно отправлен трек: {display_name}")
+                        except Exception as e:
+                            logger.error(f"Ошибка при отправке аудио {display_name}: {e}")
+                            await app.bot.send_message(chat_id=task['chat_id'],
+                                                       text=f"❌ Не удалось отправить {display_name}. Попробуй позже.")
 
                     add_stats(f_path.stat().st_size)
 
+                # Удаляем временную папку (включая LRC-файлы)
                 try:
                     await status_msg.delete()
                 except:
@@ -374,7 +425,6 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_text = update.message.text.strip()
-
     token_match = re.search(r"(y0_[a-zA-Z0-9_-]+)", raw_text)
     token = token_match.group(1) if token_match else raw_text
 
@@ -406,13 +456,15 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     content = (update.message.text or "") + " " + (update.message.caption or "")
     urls = re.findall(r'(https?://(?:m\.)?music\.yandex\.[a-z]{2,3}[^\s]+)', content)
 
-    if not urls: return WAITING_FOR_LINK
+    if not urls:
+        return WAITING_FOR_LINK
 
     user_id = update.effective_user.id
     if user_id not in link_accumulators:
         link_accumulators[user_id] = []
         context.job_queue.run_once(process_accumulated_links, 1.5, data={
-            'user_id': user_id, 'chat_id': update.effective_chat.id,
+            'user_id': user_id,
+            'chat_id': update.effective_chat.id,
             'token': context.user_data['yandex_token']
         })
 
@@ -429,12 +481,106 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def process_accumulated_links(context: ContextTypes.DEFAULT_TYPE):
     data = context.job.data
     user_id = data['user_id']
-    if user_id not in link_accumulators or not link_accumulators[user_id]: return
+    if user_id not in link_accumulators or not link_accumulators[user_id]:
+        return
 
-    links = list(dict.fromkeys(link_accumulators.pop(user_id)))[:MAX_LINKS]
-    total = len(links)
-    if total == 0: return
+    raw_links = list(dict.fromkeys(link_accumulators.pop(user_id)))[:MAX_LINKS]
+    if not raw_links:
+        return
 
+    try:
+        client = await asyncio.to_thread(Client(data['token']).init)
+    except Exception as e:
+        logger.error(f"Не удалось инициализировать клиент: {e}")
+        await context.bot.send_message(chat_id=data['chat_id'], text="❌ Ошибка авторизации. Попробуй снова.")
+        return
+
+    all_tasks = []  # список словарей с задачами на треки
+
+    for url in raw_links:
+        try:
+            if '/track/' in url:
+                track_id = re.search(r'track/(\d+)', url).group(1)
+                track_info = await asyncio.to_thread(client.tracks, [track_id])
+                if track_info and track_info[0]:
+                    t = track_info[0]
+                    artist = t.artists[0].name if t.artists else "Unknown"
+                    title = t.title
+                    duration = t.duration_ms // 1000 if t.duration_ms else 0
+                    track_name = f"{artist} — {title}"
+                    all_tasks.append({
+                        'chat_id': data['chat_id'],
+                        'url': url,
+                        'token': data['token'],
+                        'artist': artist,
+                        'title': title,
+                        'duration': duration,
+                        'track_name': track_name
+                    })
+                else:
+                    logger.warning(f"Трек не найден: {url}")
+            elif '/album/' in url and '/track/' not in url:
+                album_id = re.search(r'album/(\d+)', url).group(1)
+                album = await asyncio.to_thread(client.albums, album_id)
+                if album and album.volumes:
+                    for track in album.volumes[0]:
+                        artist = track.artists[0].name if track.artists else "Unknown"
+                        title = track.title
+                        duration = track.duration_ms // 1000 if track.duration_ms else 0
+                        track_url = f"https://music.yandex.ru/track/{track.id}"
+                        track_name = f"{artist} — {title}"
+                        all_tasks.append({
+                            'chat_id': data['chat_id'],
+                            'url': track_url,
+                            'token': data['token'],
+                            'artist': artist,
+                            'title': title,
+                            'duration': duration,
+                            'track_name': track_name
+                        })
+                else:
+                    logger.warning(f"Альбом не найден или пуст: {url}")
+            elif '/playlist/' in url:
+                playlist_match = re.search(r'users/([^/]+)/playlists/(\d+)', url) or re.search(r'playlist/(\d+)', url)
+                if playlist_match:
+                    if len(playlist_match.groups()) == 2:
+                        username, playlist_id = playlist_match.groups()
+                        playlist = await asyncio.to_thread(client.users_playlists, playlist_id, username)
+                    else:
+                        playlist_id = playlist_match.group(1)
+                        playlist = await asyncio.to_thread(client.playlist, playlist_id)
+                    if playlist and playlist.tracks:
+                        for track_data in playlist.tracks:
+                            track = track_data.track
+                            if track:
+                                artist = track.artists[0].name if track.artists else "Unknown"
+                                title = track.title
+                                duration = track.duration_ms // 1000 if track.duration_ms else 0
+                                track_url = f"https://music.yandex.ru/track/{track.id}"
+                                track_name = f"{artist} — {title}"
+                                all_tasks.append({
+                                    'chat_id': data['chat_id'],
+                                    'url': track_url,
+                                    'token': data['token'],
+                                    'artist': artist,
+                                    'title': title,
+                                    'duration': duration,
+                                    'track_name': track_name
+                                })
+                    else:
+                        logger.warning(f"Плейлист не найден или пуст: {url}")
+                else:
+                    logger.warning(f"Не удалось распознать плейлист: {url}")
+            else:
+                logger.warning(f"Неизвестный тип ссылки: {url}")
+        except Exception as e:
+            logger.error(f"Ошибка обработки ссылки {url}: {e}")
+
+    if not all_tasks:
+        await context.bot.send_message(chat_id=data['chat_id'], text="❌ Не удалось найти треки по твоим ссылкам.")
+        return
+
+    total = len(all_tasks)
     is_busy = download_semaphore.locked()
     msg_text = f"📥 Приняла запрос на {get_plural_tracks(total)}."
 
@@ -444,30 +590,11 @@ async def process_accumulated_links(context: ContextTypes.DEFAULT_TYPE):
 
     init_msg = await context.bot.send_message(chat_id=data['chat_id'], text=msg_text)
 
-    try:
-        client = await asyncio.to_thread(Client(data['token']).init)
-
-        for i, url in enumerate(links):
-            track_name = "Аудиозапись (определяю...)"
-            try:
-                if '/track/' in url:
-                    tid = re.search(r'track/(\d+)', url).group(1)
-                    tinfo = await asyncio.to_thread(client.tracks, [tid])
-                    if tinfo and tinfo[0]:
-                        t = tinfo[0]
-                        track_name = f"{t.artists[0].name} — {t.title}"
-                elif '/album/' in url and '/track/' not in url:
-                    track_name = "Целый альбом"
-            except:
-                pass
-
-            await download_queue.put({
-                'chat_id': data['chat_id'], 'url': url, 'token': data['token'],
-                'track_name': track_name, 'index': i + 1, 'total': total,
-                'init_msg_id': init_msg.message_id if i == 0 else None,
-            })
-    except Exception as e:
-        logger.error(f"Process Links Error: {e}")
+    for idx, task in enumerate(all_tasks):
+        task['index'] = idx + 1
+        task['total'] = total
+        task['init_msg_id'] = init_msg.message_id if idx == 0 else None
+        await download_queue.put(task)
 
 
 # --- МОНИТОРИНГ ---
@@ -597,8 +724,9 @@ async def post_init(app: Application):
 
 def main():
     cleanup_old_tmp_dirs()
-    with open(STATS_FILE, "w") as f:
-        f.write("0")
+    if not os.path.exists(STATS_FILE):
+        with open(STATS_FILE, "w") as f:
+            f.write("0")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
@@ -612,12 +740,10 @@ def main():
             WAITING_FOR_LINK: [MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_download)],
         },
         fallbacks=[CommandHandler('start', start)]
-
     )
 
     app.add_handler(CommandHandler('status', cmd_status))
     app.add_handler(conv)
-    print("🎸 Бот запущен, статистика обнулена.")
     app.run_polling()
 
 
