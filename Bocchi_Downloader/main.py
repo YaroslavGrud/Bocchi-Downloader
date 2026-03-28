@@ -1,9 +1,6 @@
-# (c) 2026 BocchiStation
+# (c) 2026 Hanako
 # Проект "Bocchi Downloader"
 # Копирование и использование без разрешения автора запрещено.
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import subprocess
 import asyncio
@@ -19,7 +16,7 @@ import requests
 import urllib.parse
 from pathlib import Path
 
-import syncedlyrics  # не используется, но оставлен для возможного расширения
+from dotenv import load_dotenv
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
 from mutagen.mp3 import MP3
@@ -32,27 +29,46 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, filters, Application
 )
 
+# Загрузка переменных окружения из файла .env
+load_dotenv()
+
 # --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(message)s')
 logger = logging.getLogger("BocchiStation")
 
-# --- КОНФИГУРАЦИЯ (загружается из переменных окружения) ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
-DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "/home/hanako/.local/bin/yandex-music-downloader")
+# --- КОНФИГУРАЦИЯ (из переменных окружения) ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise ValueError("Не задан TELEGRAM_TOKEN в переменных окружения")
+
+DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")  # по умолчанию в PATH
 STATS_FILE = os.getenv("STATS_FILE", "stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
+REQUEST_LIMIT_SECONDS = int(os.getenv("REQUEST_LIMIT_SECONDS", "3"))
+
+BOT_START_TIME = time.time()
 
 # --- ГЛОБАЛЬНЫЕ ОБЪЕКТЫ ---
 download_semaphore = None
 download_queue = None
 link_accumulators = {}
+user_last_request = {}      # защита от спама (частые сообщения)
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
+
+
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+def is_message_too_old(update: Update) -> bool:
+    """Проверяет, было ли сообщение отправлено до запуска бота."""
+    if update.message:
+        msg_time = update.message.date.timestamp()
+        return msg_time < BOT_START_TIME
+    return False
 
 
 # --- СЕТЕВОЙ ПОИСК МЕТАДАННЫХ (iTunes) ---
 def fetch_metadata_from_itunes(artist, title):
-    """Ищет дополнительную информацию о треке в iTunes (альбом, год, жанр, HQ обложка)"""
+    """Ищет дополнительную информацию о треке в iTunes"""
     try:
         query = urllib.parse.quote(f"{artist} {title}")
         url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=1"
@@ -97,8 +113,7 @@ def add_stats(bytes_added):
     try:
         current = 0.0
         if os.path.exists(STATS_FILE):
-            with open(STATS_FILE, "r") as f:
-                current = float(f.read())
+            with open(STATS_FILE, "r") as f: current = float(f.read())
         with open(STATS_FILE, "w") as f:
             f.write(str(current + bytes_added))
     except:
@@ -107,13 +122,11 @@ def add_stats(bytes_added):
 
 def get_formatted_stats():
     try:
-        if not os.path.exists(STATS_FILE):
-            return "0 Б"
+        if not os.path.exists(STATS_FILE): return "0 Б"
         with open(STATS_FILE, "r") as f:
             bytes_val = float(f.read())
         for unit in ['Б', 'КБ', 'МБ', 'ГБ']:
-            if bytes_val < 1024.0:
-                return f"{bytes_val:.2f} {unit}"
+            if bytes_val < 1024.0: return f"{bytes_val:.2f} {unit}"
             bytes_val /= 1024.0
         return f"{bytes_val:.2f} ТБ"
     except:
@@ -151,10 +164,7 @@ def get_network_signal():
 
 def get_ping():
     try:
-        output = subprocess.check_output(
-            ["ping", "-c", "1", "-W", "1", "ya.ru"],
-            stderr=subprocess.STDOUT, text=True
-        )
+        output = subprocess.check_output(["ping", "-c", "1", "-W", "1", "ya.ru"], stderr=subprocess.STDOUT, text=True)
         match = re.search(r'time=([\d\.]+)', output)
         return float(match.group(1)) if match else 0.0
     except:
@@ -185,9 +195,7 @@ async def worker(app: Application):
                     text=f"🌀 Обработка...\n{task['track_name']}"
                 )
 
-                # Запускаем загрузчик с параметрами:
-                # --lyrics-format lrc — сохраняет синхронизированный текст
-                # --embed-cover — встраивает обложку (загрузчик сам)
+                # Используем LRC для синхронизированного текста
                 cmd = [
                     DOWNLOADER_PATH, "--token", task['token'], "--quality", "2",
                     "--embed-cover", "--dir", str(tmp_dir), "--url", task['url'],
@@ -195,9 +203,8 @@ async def worker(app: Application):
                     "--lyrics-format", "lrc"
                 ]
 
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
+                proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE,
+                                                            stderr=asyncio.subprocess.PIPE)
 
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=DOWNLOAD_TIMEOUT)
@@ -330,11 +337,9 @@ async def worker(app: Application):
                             f"Перенаправляю на резервное облако...")
                         try:
                             with open(f_path, 'rb') as f:
-                                resp = await asyncio.to_thread(requests.post,
-                                    "https://catbox.moe/user/api.php",
-                                    data={"reqtype": "fileupload"},
-                                    files={"fileToUpload": f}
-                                )
+                                resp = await asyncio.to_thread(requests.post, "https://catbox.moe/user/api.php",
+                                                               data={"reqtype": "fileupload"},
+                                                               files={"fileToUpload": f})
                             if resp.status_code == 200:
                                 await app.bot.send_message(
                                     chat_id=task['chat_id'],
@@ -390,6 +395,11 @@ async def worker(app: Application):
 # --- ХЕНДЛЕРЫ ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Игнорируем сообщения, отправленные до запуска бота
+    if is_message_too_old(update):
+        logger.debug("Игнорирую старое сообщение /start")
+        return WAITING_FOR_LINK
+
     kb = [[KeyboardButton("🎵 Начать работу")]]
     welcome_text = (
         "🌸 Привет! Это Bocchi Downloader 🎸\n"
@@ -408,6 +418,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Игнорируем старые сообщения
+    if is_message_too_old(update):
+        logger.debug("Игнорирую старое сообщение в check_session")
+        return WAITING_FOR_LINK
+
     if 'yandex_token' in context.user_data:
         await update.message.reply_text("✅ Токен активен. Жду твои ссылки!")
         return WAITING_FOR_LINK
@@ -424,6 +439,11 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Игнорируем старые сообщения
+    if is_message_too_old(update):
+        logger.debug("Игнорирую старое сообщение в save_token")
+        return WAITING_FOR_TOKEN
+
     raw_text = update.message.text.strip()
     token_match = re.search(r"(y0_[a-zA-Z0-9_-]+)", raw_text)
     token = token_match.group(1) if token_match else raw_text
@@ -447,11 +467,28 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Игнорируем старые сообщения
+    if is_message_too_old(update):
+        logger.debug(f"Игнорирую старое сообщение от {update.effective_user.id}")
+        return WAITING_FOR_LINK
+
     if update.message.text == "🎵 Начать работу":
         return await check_session(update, context)
 
     if 'yandex_token' not in context.user_data:
         return await check_session(update, context)
+
+    # --- ЗАЩИТА ОТ СПАМА (слишком частые запросы) ---
+    user_id = update.effective_user.id
+    current_time = time.time()
+    last_time = user_last_request.get(user_id, 0)
+    if current_time - last_time < REQUEST_LIMIT_SECONDS:
+        await update.message.reply_text(
+            "🌷 Не торопись, я всё запоминаю! Подожди немного перед следующей ссылкой, пожалуйста."
+        )
+        return WAITING_FOR_LINK
+    user_last_request[user_id] = current_time
+    # --- КОНЕЦ ЗАЩИТЫ ОТ ЧАСТЫХ ЗАПРОСОВ ---
 
     content = (update.message.text or "") + " " + (update.message.caption or "")
     urls = re.findall(r'(https?://(?:m\.)?music\.yandex\.[a-z]{2,3}[^\s]+)', content)
@@ -459,7 +496,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not urls:
         return WAITING_FOR_LINK
 
-    user_id = update.effective_user.id
     if user_id not in link_accumulators:
         link_accumulators[user_id] = []
         context.job_queue.run_once(process_accumulated_links, 1.5, data={
@@ -600,6 +636,11 @@ async def process_accumulated_links(context: ContextTypes.DEFAULT_TYPE):
 # --- МОНИТОРИНГ ---
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Игнорируем старые сообщения
+    if is_message_too_old(update):
+        logger.debug("Игнорирую старое сообщение /status")
+        return
+
     status_msg = await update.message.reply_text(
         "🌸 Секретный блокнот Хитори 🎸\n\n"
         "Ой! Ты... ты заглянул сюда?!\n"
@@ -725,16 +766,12 @@ async def post_init(app: Application):
 def main():
     cleanup_old_tmp_dirs()
     if not os.path.exists(STATS_FILE):
-        with open(STATS_FILE, "w") as f:
-            f.write("0")
+        with open(STATS_FILE, "w") as f: f.write("0")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
     conv = ConversationHandler(
-        entry_points=[
-            CommandHandler('start', start),
-            MessageHandler(filters.Regex('^🎵 Начать работу$'), handle_download)
-        ],
+        entry_points=[CommandHandler('start', start), MessageHandler(filters.Regex('^🎵 Начать работу$'), handle_download)],
         states={
             WAITING_FOR_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_token)],
             WAITING_FOR_LINK: [MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_download)],
