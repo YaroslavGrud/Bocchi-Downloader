@@ -16,7 +16,7 @@ import requests
 import urllib.parse
 from pathlib import Path
 
-from dotenv import load_dotenv
+import syncedlyrics  # не используется, но оставлен на случай
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
 from mutagen.mp3 import MP3
@@ -28,8 +28,11 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, ConversationHandler, filters, Application
 )
+from dotenv import load_dotenv
 
-# Загрузка переменных окружения из файла .env
+# Новая библиотека для Catbox / Litterbox
+from catboxpy import AsyncCatboxClient, LitterboxClient
+
 load_dotenv()
 
 # --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
@@ -37,15 +40,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(messa
 logger = logging.getLogger("BocchiStation")
 
 # --- КОНФИГУРАЦИЯ (из переменных окружения) ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TELEGRAM_TOKEN:
-    raise ValueError("Не задан TELEGRAM_TOKEN в переменных окружения")
-
-DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")  # по умолчанию в PATH
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
+DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")
 STATS_FILE = os.getenv("STATS_FILE", "stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
-DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
-REQUEST_LIMIT_SECONDS = int(os.getenv("REQUEST_LIMIT_SECONDS", "3"))
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))  # 10 минут
+TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))    # 24 часа
 
 BOT_START_TIME = time.time()
 
@@ -53,27 +53,31 @@ BOT_START_TIME = time.time()
 download_semaphore = None
 download_queue = None
 link_accumulators = {}
-user_last_request = {}      # защита от спама (частые сообщения)
+worker_busy = False
+active_tasks_count = 0
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
-
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def is_message_too_old(update: Update) -> bool:
-    """Проверяет, было ли сообщение отправлено до запуска бота."""
     if update.message:
         msg_time = update.message.date.timestamp()
         return msg_time < BOT_START_TIME
     return False
 
+def get_plural_tracks(n):
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} трек"
+    elif 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
+        return f"{n} трека"
+    else:
+        return f"{n} треков"
 
 # --- СЕТЕВОЙ ПОИСК МЕТАДАННЫХ (iTunes) ---
 def fetch_metadata_from_itunes(artist, title):
-    """Ищет дополнительную информацию о треке в iTunes"""
     try:
         query = urllib.parse.quote(f"{artist} {title}")
         url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=1"
         resp = requests.get(url, timeout=10)
-
         if resp.status_code == 200:
             data = resp.json()
             if data['resultCount'] > 0:
@@ -94,7 +98,6 @@ def fetch_metadata_from_itunes(artist, title):
         logger.error(f"Ошибка поиска в iTunes API: {e}")
     return {}
 
-
 # --- УТИЛИТЫ ---
 def cleanup_old_tmp_dirs():
     count = 0
@@ -108,7 +111,6 @@ def cleanup_old_tmp_dirs():
     if count:
         print(f"🎸 Найдено и удалено забытых временных папок: {count}")
 
-
 def add_stats(bytes_added):
     try:
         current = 0.0
@@ -118,7 +120,6 @@ def add_stats(bytes_added):
             f.write(str(current + bytes_added))
     except:
         pass
-
 
 def get_formatted_stats():
     try:
@@ -132,23 +133,12 @@ def get_formatted_stats():
     except:
         return "0 Б"
 
-
-def get_plural_tracks(n):
-    if n % 10 == 1 and n % 100 != 11:
-        return f"{n} трек"
-    elif 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
-        return f"{n} трека"
-    else:
-        return f"{n} треков"
-
-
 def get_v2raya_status():
     try:
         status = subprocess.check_output(["systemctl", "is-active", "v2raya"]).decode().strip()
         return "🟢 Включена" if status == "active" else "🔴 Выключена"
     except:
         return "⚪ Статус неизвестен"
-
 
 def get_network_signal():
     try:
@@ -161,7 +151,6 @@ def get_network_signal():
         pass
     return "🔌 Ethernet"
 
-
 def get_ping():
     try:
         output = subprocess.check_output(["ping", "-c", "1", "-W", "1", "ya.ru"], stderr=subprocess.STDOUT, text=True)
@@ -170,7 +159,6 @@ def get_ping():
     except:
         return 0.0
 
-
 def get_temp():
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
@@ -178,12 +166,13 @@ def get_temp():
     except:
         return None
 
-
 # --- ВОРКЕР (ЗАГРУЗКА) ---
 
 async def worker(app: Application):
+    global worker_busy, active_tasks_count
     while True:
         task = await download_queue.get()
+        worker_busy = True
         tmp_dir = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
 
         async with download_semaphore:
@@ -195,7 +184,6 @@ async def worker(app: Application):
                     text=f"🌀 Обработка...\n{task['track_name']}"
                 )
 
-                # Используем LRC для синхронизированного текста
                 cmd = [
                     DOWNLOADER_PATH, "--token", task['token'], "--quality", "2",
                     "--embed-cover", "--dir", str(tmp_dir), "--url", task['url'],
@@ -228,7 +216,6 @@ async def worker(app: Application):
                     title = task.get('title')
                     duration = task.get('duration', 0)
 
-                    # Если нет данных из API, читаем из файла (резерв)
                     if not artist or not title:
                         try:
                             if f_path.suffix == '.m4a':
@@ -248,7 +235,6 @@ async def worker(app: Application):
                             artist = "Unknown"
                             title = f_path.stem
 
-                    # Чистим данные от загрузчика (только если читали из файла)
                     if not task.get('artist'):
                         artist = artist.replace("#artist", "Unknown").strip()
                         title = title.replace("#artist", "").replace("#title", "").strip(" -")
@@ -259,7 +245,7 @@ async def worker(app: Application):
 
                     display_name = f"{artist} — {title}"
 
-                    # --- 2. ИЩЕМ LRC-ФАЙЛ С ТЕКСТОМ ПЕСНИ (с таймкодами) ---
+                    # --- 2. ИЩЕМ LRC-ФАЙЛ ---
                     lyrics = None
                     base_name = f_path.stem
                     lrc_files = list(tmp_dir.glob(f"{base_name}.lrc"))
@@ -275,7 +261,7 @@ async def worker(app: Application):
                     # --- 3. ИЩЕМ НЕДОСТАЮЩИЕ ДАННЫЕ В ITUNES ---
                     itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
 
-                    # --- 4. ДОПИСЫВАЕМ НОВЫЕ ТЕГИ В ФАЙЛ (включая LRC-текст) ---
+                    # --- 4. ДОПИСЫВАЕМ НОВЫЕ ТЕГИ В ФАЙЛ ---
                     try:
                         if f_path.suffix.lower() == '.m4a':
                             audio = MP4(f_path)
@@ -284,7 +270,7 @@ async def worker(app: Application):
                             if itunes_data.get('album'): audio['\xa9alb'] = [itunes_data['album']]
                             if itunes_data.get('year'): audio['\xa9day'] = [str(itunes_data['year'])]
                             if itunes_data.get('genre'): audio['\xa9gen'] = [itunes_data['genre']]
-                            if lyrics: audio['\xa9lyr'] = [lyrics]   # LRC-текст (с таймкодами)
+                            if lyrics: audio['\xa9lyr'] = [lyrics]
                             if itunes_data.get('cover_bytes'):
                                 audio['covr'] = [MP4Cover(itunes_data['cover_bytes'], imageformat=MP4Cover.FORMAT_JPEG)]
                             audio.save()
@@ -298,10 +284,10 @@ async def worker(app: Application):
                             if itunes_data.get('year'): audio.tags.add(TDRC(encoding=3, text=str(itunes_data['year'])))
                             if itunes_data.get('genre'): audio.tags.add(TCON(encoding=3, text=itunes_data['genre']))
                             if lyrics:
-                                # Сохраняем LRC-текст как есть (с таймкодами) в USLT
                                 audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
                             if itunes_data.get('cover_bytes'):
-                                audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover', data=itunes_data['cover_bytes']))
+                                audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover',
+                                                    data=itunes_data['cover_bytes']))
                             audio.save()
                     except Exception as tag_e:
                         logger.error(f"Не удалось записать дополнительные теги: {tag_e}")
@@ -330,33 +316,68 @@ async def worker(app: Application):
                                                    text=f"❌ Не удалось найти файл {display_name}.")
                         continue
 
-                    # --- 6. ОТПРАВКА ---
+                    # --- 6. ОТПРАВКА (Catbox/Litterbox) ---
                     if file_size_mb > 49.0:
+                        uploaded = False
+                        error_message = ""
+
+                        # Сначала пробуем Litterbox (временное хранилище)
                         await status_msg.edit_text(
-                            f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Telegram такое не пропустит.\n"
-                            f"Перенаправляю на резервное облако...")
+                            f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на временное облако...")
                         try:
-                            with open(f_path, 'rb') as f:
-                                resp = await asyncio.to_thread(requests.post, "https://catbox.moe/user/api.php",
-                                                               data={"reqtype": "fileupload"},
-                                                               files={"fileToUpload": f})
-                            if resp.status_code == 200:
+                            litterbox = LitterboxClient()
+                            # upload_file — синхронный, оборачиваем в asyncio.to_thread
+                            url = await asyncio.to_thread(
+                                litterbox.upload_file,
+                                str(f_path),
+                                expire_time="24h"
+                            )
+                            if url and url.startswith(("https://", "http://")):
                                 await app.bot.send_message(
                                     chat_id=task['chat_id'],
                                     text=(
-                                        f"🎁 Telegram не может принять такой тяжелый файл, поэтому держи ссылку:\n\n"
-                                        f"🎵 {display_name}\n"
-                                        f"⚖️ Размер: {file_size_mb:.1f} МБ\n"
-                                        f"🔗 Скачать: {resp.text}"),
+                                        f"🎁 Файл {display_name} слишком велик для Telegram.\n"
+                                        f"Вот временная ссылка (действует 24 часа):\n\n"
+                                        f"🔗 {url}"),
                                     disable_web_page_preview=True
                                 )
+                                uploaded = True
                             else:
-                                raise Exception(f"HTTP {resp.status_code}")
+                                error_message = "Litterbox вернул не ссылку"
                         except Exception as e:
-                            logger.error(f"Ошибка загрузки на облако: {e}")
-                            await app.bot.send_message(chat_id=task['chat_id'],
-                                                       text=f"❌ Ошибка загрузки {display_name} на облако.")
+                            error_message = f"Litterbox: {e}"
+                            logger.error(error_message)
+
+                        # Если Litterbox не сработал, пробуем Catbox (постоянное хранилище)
+                        if not uploaded:
+                            await status_msg.edit_text(
+                                f"📦 Не удалось загрузить на временное облако, пробую постоянное...")
+                            try:
+                                catbox = AsyncCatboxClient()
+                                url = await catbox.upload(str(f_path))
+                                if url and url.startswith(("https://", "http://")):
+                                    await app.bot.send_message(
+                                        chat_id=task['chat_id'],
+                                        text=(
+                                            f"🎁 Файл {display_name} слишком велик для Telegram.\n"
+                                            f"Вот постоянная ссылка (файл не удалится):\n\n"
+                                            f"🔗 {url}"),
+                                        disable_web_page_preview=True
+                                    )
+                                    uploaded = True
+                                else:
+                                    error_message = "Catbox вернул не ссылку"
+                            except Exception as e:
+                                error_message = f"Catbox: {e}"
+                                logger.error(error_message)
+
+                        if not uploaded:
+                            await app.bot.send_message(
+                                chat_id=task['chat_id'],
+                                text=f"❌ Не удалось загрузить {display_name}. Ошибка: {error_message}"
+                            )
                     else:
+                        # Для файлов до 49 МБ отправляем через Bot API
                         try:
                             with open(f_path, 'rb') as f:
                                 await app.bot.send_audio(
@@ -364,7 +385,7 @@ async def worker(app: Application):
                                     audio=f,
                                     performer=artist,
                                     title=title,
-                                    duration=duration,
+                                    duration=duration if duration > 0 else None,
                                     filename=safe_filename,
                                     read_timeout=600,
                                     write_timeout=600,
@@ -373,13 +394,14 @@ async def worker(app: Application):
                                 )
                             logger.info(f"Успешно отправлен трек: {display_name}")
                         except Exception as e:
-                            logger.error(f"Ошибка при отправке аудио {display_name}: {e}")
-                            await app.bot.send_message(chat_id=task['chat_id'],
-                                                       text=f"❌ Не удалось отправить {display_name}. Попробуй позже.")
+                            logger.error(f"Ошибка при отправке аудио {display_name}: {e}", exc_info=True)
+                            await app.bot.send_message(
+                                chat_id=task['chat_id'],
+                                text=f"❌ Не удалось отправить {display_name}: {str(e)[:200]}"
+                            )
 
                     add_stats(f_path.stat().st_size)
 
-                # Удаляем временную папку (включая LRC-файлы)
                 try:
                     await status_msg.delete()
                 except:
@@ -390,12 +412,13 @@ async def worker(app: Application):
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 download_queue.task_done()
+                active_tasks_count -= 1
+                worker_busy = False
 
 
 # --- ХЕНДЛЕРЫ ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Игнорируем сообщения, отправленные до запуска бота
     if is_message_too_old(update):
         logger.debug("Игнорирую старое сообщение /start")
         return WAITING_FOR_LINK
@@ -418,14 +441,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Игнорируем старые сообщения
     if is_message_too_old(update):
         logger.debug("Игнорирую старое сообщение в check_session")
         return WAITING_FOR_LINK
 
     if 'yandex_token' in context.user_data:
+        token_time = context.user_data.get('token_time', 0)
+        if time.time() - token_time > TOKEN_LIFETIME:
+            del context.user_data['yandex_token']
+            if 'token_time' in context.user_data:
+                del context.user_data['token_time']
+            await update.message.reply_text(
+                "🕐 Срок действия токена истёк. Пожалуйста, авторизуйтесь заново."
+            )
+            return WAITING_FOR_LINK
         await update.message.reply_text("✅ Токен активен. Жду твои ссылки!")
         return WAITING_FOR_LINK
+
     auth_text = (
         "🔑 Авторизация\n\n"
         "Чтобы я могла найти твои треки в хорошем качестве, мне нужен доступ к Яндекс Музыке.\n\n"
@@ -439,7 +471,6 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Игнорируем старые сообщения
     if is_message_too_old(update):
         logger.debug("Игнорирую старое сообщение в save_token")
         return WAITING_FOR_TOKEN
@@ -457,6 +488,7 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         client = await asyncio.to_thread(Client(token).init)
         context.user_data['yandex_token'] = token
+        context.user_data['token_time'] = time.time()
         login = client.account_status().account.login
         await status_msg.edit_text(f"✅ Ура! Я узнала тебя, {login}! Теперь всё готово. Жду ссылки! 🎸")
         return WAITING_FOR_LINK
@@ -467,7 +499,6 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Игнорируем старые сообщения
     if is_message_too_old(update):
         logger.debug(f"Игнорирую старое сообщение от {update.effective_user.id}")
         return WAITING_FOR_LINK
@@ -475,20 +506,18 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "🎵 Начать работу":
         return await check_session(update, context)
 
-    if 'yandex_token' not in context.user_data:
+    if 'yandex_token' in context.user_data:
+        token_time = context.user_data.get('token_time', 0)
+        if time.time() - token_time > TOKEN_LIFETIME:
+            del context.user_data['yandex_token']
+            if 'token_time' in context.user_data:
+                del context.user_data['token_time']
+            await update.message.reply_text(
+                "🕐 Срок действия токена истёк. Пожалуйста, авторизуйтесь заново."
+            )
+            return WAITING_FOR_LINK
+    else:
         return await check_session(update, context)
-
-    # --- ЗАЩИТА ОТ СПАМА (слишком частые запросы) ---
-    user_id = update.effective_user.id
-    current_time = time.time()
-    last_time = user_last_request.get(user_id, 0)
-    if current_time - last_time < REQUEST_LIMIT_SECONDS:
-        await update.message.reply_text(
-            "🌷 Не торопись, я всё запоминаю! Подожди немного перед следующей ссылкой, пожалуйста."
-        )
-        return WAITING_FOR_LINK
-    user_last_request[user_id] = current_time
-    # --- КОНЕЦ ЗАЩИТЫ ОТ ЧАСТЫХ ЗАПРОСОВ ---
 
     content = (update.message.text or "") + " " + (update.message.caption or "")
     urls = re.findall(r'(https?://(?:m\.)?music\.yandex\.[a-z]{2,3}[^\s]+)', content)
@@ -496,6 +525,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not urls:
         return WAITING_FOR_LINK
 
+    user_id = update.effective_user.id
     if user_id not in link_accumulators:
         link_accumulators[user_id] = []
         context.job_queue.run_once(process_accumulated_links, 1.5, data={
@@ -515,6 +545,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def process_accumulated_links(context: ContextTypes.DEFAULT_TYPE):
+    global active_tasks_count
     data = context.job.data
     user_id = data['user_id']
     if user_id not in link_accumulators or not link_accumulators[user_id]:
@@ -531,7 +562,7 @@ async def process_accumulated_links(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=data['chat_id'], text="❌ Ошибка авторизации. Попробуй снова.")
         return
 
-    all_tasks = []  # список словарей с задачами на треки
+    all_tasks = []
 
     for url in raw_links:
         try:
@@ -617,7 +648,7 @@ async def process_accumulated_links(context: ContextTypes.DEFAULT_TYPE):
         return
 
     total = len(all_tasks)
-    is_busy = download_semaphore.locked()
+    is_busy = worker_busy
     msg_text = f"📥 Приняла запрос на {get_plural_tracks(total)}."
 
     if is_busy:
@@ -632,11 +663,24 @@ async def process_accumulated_links(context: ContextTypes.DEFAULT_TYPE):
         task['init_msg_id'] = init_msg.message_id if idx == 0 else None
         await download_queue.put(task)
 
+    active_tasks_count += len(all_tasks)
+
+
+async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_message_too_old(update):
+        return
+    if 'yandex_token' in context.user_data:
+        del context.user_data['yandex_token']
+        if 'token_time' in context.user_data:
+            del context.user_data['token_time']
+        await update.message.reply_text("🔓 Токен удалён. Вы вышли из аккаунта.")
+    else:
+        await update.message.reply_text("Вы и так не авторизованы.")
+
 
 # --- МОНИТОРИНГ ---
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Игнорируем старые сообщения
     if is_message_too_old(update):
         logger.debug("Игнорирую старое сообщение /status")
         return
@@ -718,9 +762,17 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Скорость отклика: {get_ping()} мс к серверам Яндекса\n\n"
         )
 
+        queue_size = active_tasks_count
+        if queue_size == 0:
+            queue_text = "• Сейчас я свободна, жду новых ссылок 🎸"
+        elif queue_size == 1:
+            queue_text = f"• Сейчас меня ждёт {get_plural_tracks(queue_size)}"
+        else:
+            queue_text = f"• Сейчас меня ждут {get_plural_tracks(queue_size)}"
+
         work_block = (
             "Очередь и загрузки 📥\n"
-            f"• Сейчас меня ждут {download_queue.qsize()} человек\n"
+            f"{queue_text}\n"
             f"• Всего с запуска я нашла треков на целых {get_formatted_stats()}\n\n"
         )
 
@@ -771,7 +823,8 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
     conv = ConversationHandler(
-        entry_points=[CommandHandler('start', start), MessageHandler(filters.Regex('^🎵 Начать работу$'), handle_download)],
+        entry_points=[CommandHandler('start', start),
+                      MessageHandler(filters.Regex('^🎵 Начать работу$'), handle_download)],
         states={
             WAITING_FOR_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_token)],
             WAITING_FOR_LINK: [MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_download)],
@@ -780,6 +833,7 @@ def main():
     )
 
     app.add_handler(CommandHandler('status', cmd_status))
+    app.add_handler(CommandHandler('logout', cmd_logout))
     app.add_handler(conv)
     app.run_polling()
 
