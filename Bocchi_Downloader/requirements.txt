@@ -1,7 +1,7 @@
-python-telegram-bot
-yandex-music
-mutagen
-requests
-psutil
-syncedlyrics
-python-dotenv
+python-telegram-bot>=20.0
+yandex-music>=2.0
+mutagen>=1.45
+psutil>=5.9
+requests>=2.28
+syncedlyrics>=0.5  # опционально, можно удалить, если не нужен
+python-dotenv>=0.19
