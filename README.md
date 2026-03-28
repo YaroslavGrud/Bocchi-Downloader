@@ -25,7 +25,7 @@ Telegram‑бот для скачивания музыки из Яндекс.М�
 ## 📋 Требования
 
 - Python 3.8 или выше
-- Установленный [yandex-music-downloader](https://github.com/ilyhalight/yandex-music-downloader)
+- Установленный [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader)
 - Токен Telegram бота (получить у [@BotFather](https://t.me/BotFather))
 
 ## 🚀 Установка
@@ -46,13 +46,8 @@ pip install -r requirements.txt
 ### 3. Установка внешнего загрузчика
 
 ```bash
-# Через pip
-pip install yandex-music-downloader
-
-# Или скачайте бинарный файл с релизов
-wget https://github.com/ilyhalight/yandex-music-downloader/releases/latest/download/yandex-music-downloader-linux-amd64
-chmod +x yandex-music-downloader-linux-amd64
-sudo mv yandex-music-downloader-linux-amd64 /usr/local/bin/yandex-music-downloader
+pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
+yandex-music-downloader --help
 ```
 
 ### 4. Настройка переменных окружения
@@ -148,7 +143,7 @@ python bot.py
 
 ## 🙏 Благодарности
 
-- [yandex-music-downloader](https://github.com/ilyhalight/yandex-music-downloader) — отличный загрузчик для Яндекс.Музыки
+- [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) — отличный загрузчик для Яндекс.Музыки
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) — мощная библиотека для Telegram ботов
 - [catboxpy](https://github.com/anshonweb/catboxpy) — обёртка для Catbox/Litterbox
 - Человеку, что подал идею создать бота (спасибо Yume)
