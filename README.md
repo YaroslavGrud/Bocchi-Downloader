@@ -33,8 +33,8 @@ Telegram‑бот для скачивания музыки из Яндекс.М�
 ### 1. Клонирование репозитория
 
 ```bash
-git clone https://github.com/yourusername/BocchiDownloader.git
-cd BocchiDownloader
+git clone https://github.com/YaroslavGrud/Bocchi-Downloader.git
+cd Bocchi-Downloader
 ```
 
 ### 2. Установка зависимостей
@@ -92,6 +92,7 @@ python bot.py
 |---------|----------|
 | `/start` | Начать диалог с ботом |
 | `/status` | Показать состояние сервера (CPU, память, температура, очередь загрузок) |
+| `/logout` | Удалить сохранённый токен и выйти из аккаунта |
 
 ## 🔧 Особенности работы
 
@@ -113,17 +114,13 @@ python bot.py
 - **Метаданные**: встроены в аудиофайл (ID3 для MP3, MP4 для M4A)
 - **Текст песен**: встроен в теги (USLT для MP3, `©lyr` для M4A) с сохранением таймкодов
 
+### Облачное хранилище
+Файлы размером более 49 МБ не могут быть отправлены через Telegram Bot API. В этом случае бот использует:
 
-## 📦 Зависимости
+1. Litterbox – временное хранилище (ссылка действует 24 часа)
+2. Catbox – постоянное хранилище (резервный вариант)
 
-```
-python-telegram-bot>=20.0    # Работа с Telegram API
-yandex-music>=2.0            # API Яндекс.Музыки
-mutagen>=1.45                # Работа с метаданными аудио
-psutil>=5.9                  # Мониторинг системы
-requests>=2.28               # HTTP-запросы
-python-dotenv>=0.19          # Загрузка .env файла
-```
+Ссылки приходят в чат и файл можно скачать по ним.
 
 ## 🐛 Устранение неполадок
 
@@ -153,6 +150,7 @@ python-dotenv>=0.19          # Загрузка .env файла
 
 - [yandex-music-downloader](https://github.com/ilyhalight/yandex-music-downloader) — отличный загрузчик для Яндекс.Музыки
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) — мощная библиотека для Telegram ботов
+- [catboxpy](https://github.com/anshonweb/catboxpy) — обёртка для Catbox/Litterbox
 - Человеку, что подал идею создать бота (спасибо Yume)
 ---
 
