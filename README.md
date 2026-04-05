@@ -1,5 +1,5 @@
 
-# 🎸 Bocchi Downloader (Beta)
+# 🎸 Bocchi Downloader
 
 Telegram‑бот для скачивания музыки из Яндекс.Музыки с богатыми метаданными и синхронизированными текстами песен.
 
@@ -48,24 +48,6 @@ pip install -r requirements.txt
 ```bash
 pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
 yandex-music-downloader --help
-```
-
-### 4. Настройка переменных окружения
-
-Создайте файл `.env` в корне проекта:
-
-```env
-TELEGRAM_TOKEN=ваш_токен_бота
-DOWNLOADER_PATH=/usr/local/bin/yandex-music-downloader
-STATS_FILE=stats.txt
-MAX_LINKS=10
-DOWNLOAD_TIMEOUT=600
-```
-
-### 5. Запуск бота
-
-```bash
-python bot.py
 ```
 
 ## 🎮 Использование
