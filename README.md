@@ -6,6 +6,8 @@ Telegram‑бот для скачивания музыки из Яндекс.М�
 > ⚠️ **Бот находится в стадии бета-тестирования**  
 > Некоторые функции могут работать нестабильно, возможны ошибки. Если вы столкнулись с проблемой, пожалуйста, сообщите о ней в [Issues](https://github.com/YaroslavGrud/Bocchi-Downloader/issues) или свяжитесь с автором. Спасибо за ваше терпение и помощь в улучшении проекта!
 
+> **Бот также может потребовать наличие Telegram Premium для работы некоторых функций**
+
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
