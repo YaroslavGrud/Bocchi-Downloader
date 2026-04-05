@@ -1,9 +1,7 @@
-python-telegram-bot
-python-telegram-bot[job-queue]
-yandex-music
-mutagen
-psutil
-requests
-python-dotenv
-catboxpy
--U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
+python-telegram-bot[job-queue]>=20.0
+yandex-music>=0.22.0
+mutagen>=1.47.0
+psutil>=5.9.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+catboxpy>=0.1.0
