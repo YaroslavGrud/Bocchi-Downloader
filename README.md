@@ -51,6 +51,10 @@ pip install -r requirements.txt
 pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
 yandex-music-downloader --help
 ```
+## 🤖 Установка под Android
+```bash
+termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install python ffmpeg git binutils -y && python -m pip install --upgrade pip && pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip && python -m venv bocchi_env && bocchi_env/bin/pip install --upgrade pip setuptools wheel && bocchi_env/bin/pip install python-telegram-bot[job-queue] catboxpy mutagen requests python-dotenv yandex-music && wget -O bocchi_bot_android.py https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py && read -p "Введите токен Telegram бота: " TOKEN && echo "TELEGRAM_TOKEN=$TOKEN" > .env && bocchi_env/bin/python bocchi_bot_android.py
+```
 
 ## 🎮 Использование
 
