@@ -5,18 +5,9 @@ __pycache__/
 .Python
 env/
 venv/
-*.egg-info/
-dist/
-build/
-
-# Файлы статистики
-stats.txt
-
-# Логи
-*.log
-
-# Временные папки бота
-bocchi_tmp_*
-
-# Файлы окружения
 .env
+*.log
+stats.txt
+bocchi_tmp_*
+*.pid
+.DS_Store
