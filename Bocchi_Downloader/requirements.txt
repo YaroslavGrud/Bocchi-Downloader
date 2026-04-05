@@ -6,3 +6,4 @@ psutil
 requests
 python-dotenv
 catboxpy
+-U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
