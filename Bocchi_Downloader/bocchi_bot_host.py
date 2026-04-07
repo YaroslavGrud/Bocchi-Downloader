@@ -1,8 +1,7 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
 # Версия с поддержкой качества, авто-понижением памяти, обложками через thumb
-# ИСПРАВЛЕНА ПРОБЛЕМА СО СПАМОМ (повторные приветствия/запросы токена)
-# Защита от частых вызовов: 5 секунд вместо 30
+# ИСПРАВЛЕНА ПРОБЛЕМА СО СПАМОМ (блокировки + дедупликация + задержка 5 сек)
 
 import asyncio
 import logging
@@ -48,7 +47,7 @@ STATS_FILE = os.getenv("STATS_FILE", "../stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
-CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120")) # Время отправки в облако
+CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))  # Время отправки в облако
 DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))  # 0=низкое, 1=среднее, 2=высокое
 
 BOT_START_TIME = time.time()
@@ -65,8 +64,9 @@ last_auth_warning = {}
 WARNING_COOLDOWN = 60
 worker_task = None
 
-# --- ДЕДУПЛИКАЦИЯ СООБЩЕНИЙ (чтобы одно и то же сообщение не обрабатывалось дважды) ---
+# --- ДЕДУПЛИКАЦИЯ СООБЩЕНИЙ И БЛОКИРОВКИ ПОЛЬЗОВАТЕЛЕЙ ---
 last_processed_msg = {}  # {user_id: message_id}
+user_locks = {}          # {user_id: asyncio.Lock} для сериализации команд
 
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
@@ -217,7 +217,7 @@ def extract_cover_from_audio(file_path: Path) -> bytes:
         logger.warning(f"Не удалось извлечь обложку: {e}")
         return None
 
-# --- АНИМИРОВАННАЯ ОТПРАВКА ---
+# --- АНИМИРОВАННАЯ ОТПРАВКА (исправлена ошибка пустого черновика) ---
 async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
     draft_id = int(time.time() * 1000) + random.randint(1, 10000)
     for attempt in range(max_retries):
@@ -227,8 +227,9 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
                 await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-            except:
-                await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=" ")
+            except Exception as e:
+                # Игнорируем ошибку, если черновик уже удалён или пустой
+                logger.debug(f"Не удалось удалить черновик: {e}")
             return msg
         except Exception as e:
             logger.warning(f"Анимация {attempt+1}: {e}")
@@ -277,7 +278,7 @@ async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите число: 0, 1 или 2.")
 
-# --- ХЕНДЛЕРЫ АВТОРИЗАЦИИ (С ЗАЩИТОЙ ОТ СПАМА) ---
+# --- ХЕНДЛЕРЫ АВТОРИЗАЦИИ (С БЛОКИРОВКАМИ) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
@@ -285,65 +286,78 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    # Если токен уже есть и валиден – показываем главное меню без приветствия
-    if is_token_valid(context):
-        await show_main_menu(update, context)
-        return WAITING_FOR_LINK
+    # Получаем или создаём блокировку для этого пользователя
+    lock = user_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        user_locks[user_id] = lock
 
-    # Защита от частого вызова /start (не чаще 1 раза в 5 секунд)
-    last_welcome = context.user_data.get('last_welcome_time', 0)
-    if time.time() - last_welcome < 5:  # <-- изменено с 30 на 5
-        logger.info(f"Игнорируем частый /start от {user_id}")
-        return WAITING_FOR_LINK
-    context.user_data['last_welcome_time'] = time.time()
+    async with lock:
+        # Если токен уже есть и валиден – показываем главное меню без приветствия
+        if is_token_valid(context):
+            await show_main_menu(update, context)
+            return WAITING_FOR_LINK
 
-    last_auth_warning.pop(user_id, None)
-    kb = [[KeyboardButton("🎵 Начать работу")]]
-    welcome = (
-        "🌸 Привет! Это Bocchi Downloader 🎸\n\n"
-        "Теперь я живу на специальном хостинг сервере и "
-        "буду помогать тебе скачать любимые треки из Яндекс Музыки.\n\n"
-        "✨ Как мы будем работать:\n"
-        f"• Можешь присылать до {MAX_LINKS} ссылок за один раз.\n"
-        "• Я буду скачивать всё аккуратно и строго по очереди.\n\n"
-        "Жми кнопку ниже, чтобы войти в аккаунт и начать!"
-    )
-    await send_animated_message(
-        context.bot, chat_id,
-        welcome,
-        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
-    )
-    return WAITING_FOR_LINK
+        # Защита от частого вызова /start (не чаще 5 секунд)
+        last_welcome = context.user_data.get('last_welcome_time', 0)
+        if time.time() - last_welcome < 5:
+            logger.info(f"Игнорируем частый /start от {user_id}")
+            return WAITING_FOR_LINK
+        context.user_data['last_welcome_time'] = time.time()
+
+        last_auth_warning.pop(user_id, None)
+        kb = [[KeyboardButton("🎵 Начать работу")]]
+        welcome = (
+            "🌸 Привет! Это Bocchi Downloader 🎸\n\n"
+            "Теперь я живу на специальном хостинг сервере и "
+            "буду помогать тебе скачать любимые треки из Яндекс Музыки.\n\n"
+            "✨ Как мы будем работать:\n"
+            f"• Можешь присылать до {MAX_LINKS} ссылок за один раз.\n"
+            "• Я буду скачивать всё аккуратно и строго по очереди.\n\n"
+            "Жми кнопку ниже, чтобы войти в аккаунт и начать!"
+        )
+        await send_animated_message(
+            context.bot, chat_id,
+            welcome,
+            reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+        )
+        return WAITING_FOR_LINK
 
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
 
-    if is_token_valid(context):
-        await show_main_menu(update, context)
-        return WAITING_FOR_LINK
-
     user_id = update.effective_user.id
-    # Не спамить запросом токена чаще 5 секунд
-    last_request = context.user_data.get('last_auth_request_time', 0)
-    if time.time() - last_request < 5:  # <-- изменено с 30 на 5
-        logger.info(f"Игнорируем частый запрос токена от {user_id}")
-        return WAITING_FOR_TOKEN
-    context.user_data['last_auth_request_time'] = time.time()
+    lock = user_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        user_locks[user_id] = lock
 
-    auth_text = (
-        "🔑 Авторизация\n\n"
-        "1️⃣ Перейди по [ссылке](https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d)\n"
-        "2️⃣ Нажми «Войти» или «Разрешить».\n"
-        "3️⃣ После входа страница может стать первоначальной или полностью пустой — не пугайся, так и должно быть!\n"
-        "3️⃣ Скопируй весь адрес из строки браузера и отправь его мне."
-    )
-    await send_animated_message(
-        context.bot, update.effective_chat.id,
-        auth_text,
-        parse_mode="Markdown", disable_web_page_preview=True
-    )
-    return WAITING_FOR_TOKEN
+    async with lock:
+        if is_token_valid(context):
+            await show_main_menu(update, context)
+            return WAITING_FOR_LINK
+
+        # Не спамить запросом токена чаще 5 секунд
+        last_request = context.user_data.get('last_auth_request_time', 0)
+        if time.time() - last_request < 5:
+            logger.info(f"Игнорируем частый запрос токена от {user_id}")
+            return WAITING_FOR_TOKEN
+        context.user_data['last_auth_request_time'] = time.time()
+
+        auth_text = (
+            "🔑 Авторизация\n\n"
+            "1️⃣ Перейди по [ссылке](https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d)\n"
+            "2️⃣ Нажми «Войти» или «Разрешить».\n"
+            "3️⃣ После входа страница может стать первоначальной или полностью пустой — не пугайся, так и должно быть!\n"
+            "4️⃣ Скопируй весь адрес из строки браузера и отправь его мне."
+        )
+        await send_animated_message(
+            context.bot, update.effective_chat.id,
+            auth_text,
+            parse_mode="Markdown", disable_web_page_preview=True
+        )
+        return WAITING_FOR_TOKEN
 
 async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
@@ -504,6 +518,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
+# --- ПРОЦЕССОР ССЫЛОК (НЕ ИЗМЕНЁН) ---
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
@@ -615,7 +630,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     global active_tasks_count
     active_tasks_count += len(all_tasks)
 
-# --- ВОРКЕР (С АВТОПОНИЖЕНИЕМ КАЧЕСТВА И ОБЛОЖКАМИ) ---
+# --- ВОРКЕР (НЕ ИЗМЕНЁН, КРОМЕ ИМПОРТОВ) ---
 async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
