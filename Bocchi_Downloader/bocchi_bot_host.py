@@ -1,8 +1,7 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
-# ФИНАЛЬНАЯ СТАБИЛЬНАЯ ВЕРСИЯ (БЕЗ ОБЛОЖЕК ДЛЯ TELEGRAM):
-# - Убрана вся логика сжатия и отправки обложек
-# - Удалены импорты PIL
+# ФИНАЛЬНАЯ СТАБИЛЬНАЯ ВЕРСИЯ:
+# - Добавлено сжатие обложек для Telegram (Pillow)
 # - Исправлен парсинг альбомов (все тома)
 # - Универсальный парсинг ссылок (включая handlers/playlist.jsx)
 # - Корректный extract_base_url с сохранением домена
@@ -39,6 +38,7 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, filters
 )
 from yandex_music import Client
+from PIL import Image
 
 load_dotenv()
 
@@ -138,14 +138,56 @@ def fetch_metadata_from_itunes(artist, title):
             data = resp.json()
             if data['resultCount'] > 0:
                 track = data['results'][0]
+                cover_url = track.get('artworkUrl100', '').replace('100x100bb.jpg', '1000x1000bb.jpg')
+                cover_bytes = None
+                if cover_url:
+                    cover_resp = requests.get(cover_url, timeout=10)
+                    if cover_resp.status_code == 200:
+                        cover_bytes = cover_resp.content
                 return {
                     'album': track.get('collectionName'),
                     'year': track.get('releaseDate', '')[:4],
                     'genre': track.get('primaryGenreName'),
+                    'cover_bytes': cover_bytes
                 }
     except Exception as e:
         logger.error(f"Ошибка iTunes: {e}")
     return {}
+
+def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> bytes | None:
+    """Сжимает обложку до указанного максимального размера (по умолчанию 200 KB)."""
+    if not cover_bytes or len(cover_bytes) <= max_size_bytes:
+        return cover_bytes
+    try:
+        img = Image.open(io.BytesIO(cover_bytes))
+        if img.mode in ('RGBA', 'P'):
+            img = img.convert('RGB')
+        # Пробуем уменьшить качество JPEG
+        quality = 85
+        while quality >= 30:
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=quality, optimize=True)
+            if output.tell() <= max_size_bytes:
+                return output.getvalue()
+            quality -= 10
+        # Уменьшаем размеры
+        for scale in [0.75, 0.5, 0.3]:
+            new_size = (int(img.width * scale), int(img.height * scale))
+            resized = img.resize(new_size, Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            resized.save(output, format='JPEG', quality=75, optimize=True)
+            if output.tell() <= max_size_bytes:
+                return output.getvalue()
+        # Финальная попытка с очень низким качеством
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=20, optimize=True)
+        if output.tell() <= max_size_bytes:
+            return output.getvalue()
+        logger.warning(f"Не удалось сжать обложку: исходный размер {len(cover_bytes)} байт, минимальный {output.tell()}")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка сжатия обложки: {e}")
+        return None
 
 def cleanup_old_tmp_dirs():
     count = 0
@@ -665,7 +707,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     global active_tasks_count
     active_tasks_count += len(all_tasks)
 
-# --- ВОРКЕР (с fallback отправки, без обложек) ---
+# --- ВОРКЕР (с fallback отправки и сжатием обложек) ---
 async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
@@ -833,7 +875,7 @@ async def worker_loop(app):
 
                             itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
 
-                            # Запись дополнительных тегов (без обложки)
+                            # Запись дополнительных тегов (включая обложку в файл)
                             try:
                                 if f_path.suffix.lower() == '.m4a':
                                     audio = MP4(f_path)
@@ -843,7 +885,8 @@ async def worker_loop(app):
                                     if itunes_data.get('year'): audio['\xa9day'] = [str(itunes_data['year'])]
                                     if itunes_data.get('genre'): audio['\xa9gen'] = [itunes_data['genre']]
                                     if lyrics: audio['\xa9lyr'] = [lyrics]
-                                    # Обложка не добавляется
+                                    if itunes_data.get('cover_bytes'):
+                                        audio['covr'] = [MP4Cover(itunes_data['cover_bytes'], imageformat=MP4Cover.FORMAT_JPEG)]
                                     audio.save()
                                 else:
                                     audio = MP3(f_path, ID3=ID3)
@@ -856,7 +899,9 @@ async def worker_loop(app):
                                     if itunes_data.get('genre'): audio.tags.add(TCON(encoding=3, text=itunes_data['genre']))
                                     if lyrics:
                                         audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
-                                    # Обложка не добавляется
+                                    if itunes_data.get('cover_bytes'):
+                                        audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover',
+                                                            data=itunes_data['cover_bytes']))
                                     audio.save()
                             except Exception as tag_e:
                                 logger.error(f"Ошибка записи тегов: {tag_e}")
@@ -881,11 +926,15 @@ async def worker_loop(app):
                                                            text=f"❌ Не найден файл {display_name}.")
                                 continue
 
-                            # --- ОТПРАВКА С FALLBACK (без обложки) ---
+                            # Сжатие обложки для отправки в Telegram
+                            cover_bytes_raw = itunes_data.get('cover_bytes')
+                            thumbnail = compress_cover(cover_bytes_raw) if cover_bytes_raw else None
+
+                            # --- ОТПРАВКА С FALLBACK ---
                             sent = False
                             last_error = None
 
-                            # Попытка 1: отправить как аудио (без thumbnail)
+                            # Попытка 1: отправить как аудио
                             try:
                                 with open(f_path, 'rb') as f:
                                     await app.bot.send_audio(
@@ -895,6 +944,7 @@ async def worker_loop(app):
                                         title=title,
                                         duration=duration if duration > 0 else None,
                                         filename=safe_filename,
+                                        thumbnail=thumbnail,
                                         read_timeout=600, write_timeout=600,
                                         connect_timeout=600, pool_timeout=600
                                     )
