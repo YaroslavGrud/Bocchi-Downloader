@@ -191,6 +191,7 @@ async def worker(app):
         tmp_dir = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
 
         async with download_semaphore:
+            status_msg = None
             try:
                 tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -343,8 +344,13 @@ async def worker(app):
                     if file_size_mb > 49.0:
                         uploaded = False
                         error_message = ""
-                        await status_msg.edit_text(
-                            f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на временное облако...")
+                        if status_msg:
+                            try:
+                                await status_msg.edit_text(
+                                    f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на временное облако..."
+                                )
+                            except:
+                                pass
                         try:
                             litterbox = LitterboxClient()
                             url = await asyncio.to_thread(litterbox.upload_file, str(f_path), expire_time="24h")
@@ -421,19 +427,25 @@ async def worker(app):
                         except Exception as e:
                             logger.error(f"Ошибка отправки финального сообщения или меню: {e}")
 
-                try:
-                    await status_msg.delete()
-                except:
-                    pass
-
             except Exception as e:
-                logger.error(f"Worker Error: {e}")
-                await app.bot.send_message(chat_id=task['chat_id'], text=f"❌ Ошибка: {str(e)[:200]}")
+                logger.error(f"Worker Error: {e}", exc_info=True)
+                if status_msg:
+                    try:
+                        await status_msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
+                    except:
+                        await app.bot.send_message(chat_id=task['chat_id'], text=f"❌ Ошибка: {str(e)[:200]}")
+                else:
+                    await app.bot.send_message(chat_id=task['chat_id'], text=f"❌ Ошибка: {str(e)[:200]}")
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 download_queue.task_done()
                 active_tasks_count -= 1
                 worker_busy = False
+                if status_msg:
+                    try:
+                        await status_msg.delete()
+                    except Exception as e:
+                        logger.debug(f"Не удалось удалить статусное сообщение: {e}")
 
 # --- ХЕНДЛЕРЫ ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -592,11 +604,21 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         link_accumulators[user_id] = []
     link_accumulators[user_id].extend(urls)
 
-    async def delayed_process():
-        await asyncio.sleep(1.5)
-        await process_accumulated_links(user_id, chat_id, context, context.user_data['yandex_token'])
+    # Безопасная отложенная обработка
+    async def safe_delayed_process():
+        try:
+            await process_accumulated_links(user_id, chat_id, context, context.user_data['yandex_token'])
+        except Exception as e:
+            logger.error(f"Ошибка в отложенной обработке: {e}", exc_info=True)
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="❌ Не удалось обработать ссылки из-за внутренней ошибки. Попробуйте ещё раз."
+                )
+            except:
+                pass
 
-    task = asyncio.create_task(delayed_process())
+    task = asyncio.create_task(safe_delayed_process())
     user_delay_tasks[user_id] = task
 
     try:
@@ -606,118 +628,128 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_FOR_LINK
 
 async def process_accumulated_links(user_id, chat_id, context, token):
-    global active_tasks_count
     user_delay_tasks.pop(user_id, None)
     if user_id not in link_accumulators or not link_accumulators[user_id]:
         return
-    raw_links = list(dict.fromkeys(link_accumulators.pop(user_id)))[:MAX_LINKS]
-    if not raw_links:
-        return
 
     try:
-        client = await asyncio.to_thread(Client(token).init)
-    except Exception as e:
-        logger.error(f"Не удалось инициализировать клиент: {e}")
-        await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка авторизации. Попробуй снова.")
-        return
+        raw_links = list(dict.fromkeys(link_accumulators.pop(user_id)))[:MAX_LINKS]
+        if not raw_links:
+            return
 
-    all_tasks = []
-    for url in raw_links:
         try:
-            if '/track/' in url:
-                track_id = re.search(r'track/(\d+)', url).group(1)
-                track_info = await asyncio.to_thread(client.tracks, [track_id])
-                if track_info and track_info[0]:
-                    t = track_info[0]
-                    artist = t.artists[0].name if t.artists else "Unknown"
-                    title = t.title
-                    duration = t.duration_ms // 1000 if t.duration_ms else 0
-                    track_name = f"{artist} — {title}"
-                    all_tasks.append({
-                        'chat_id': chat_id,
-                        'url': url,
-                        'token': token,
-                        'artist': artist,
-                        'title': title,
-                        'duration': duration,
-                        'track_name': track_name
-                    })
-                else:
-                    logger.warning(f"Трек не найден: {url}")
-            elif '/album/' in url and '/track/' not in url:
-                album_id = re.search(r'album/(\d+)', url).group(1)
-                album = await asyncio.to_thread(client.albums, album_id)
-                if album and album.volumes:
-                    for track in album.volumes[0]:
-                        artist = track.artists[0].name if track.artists else "Unknown"
-                        title = track.title
-                        duration = track.duration_ms // 1000 if track.duration_ms else 0
-                        track_url = f"https://music.yandex.ru/track/{track.id}"
+            client = await asyncio.to_thread(Client(token).init)
+        except Exception as e:
+            logger.error(f"Не удалось инициализировать клиент: {e}")
+            await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка авторизации. Попробуй снова.")
+            return
+
+        all_tasks = []
+        for url in raw_links:
+            try:
+                if '/track/' in url:
+                    track_id = re.search(r'track/(\d+)', url).group(1)
+                    track_info = await asyncio.to_thread(client.tracks, [track_id])
+                    if track_info and track_info[0]:
+                        t = track_info[0]
+                        artist = t.artists[0].name if t.artists else "Unknown"
+                        title = t.title
+                        duration = t.duration_ms // 1000 if t.duration_ms else 0
                         track_name = f"{artist} — {title}"
                         all_tasks.append({
                             'chat_id': chat_id,
-                            'url': track_url,
+                            'url': url,
                             'token': token,
                             'artist': artist,
                             'title': title,
                             'duration': duration,
                             'track_name': track_name
                         })
-                else:
-                    logger.warning(f"Альбом не найден или пуст: {url}")
-            elif '/playlist/' in url:
-                playlist_match = re.search(r'users/([^/]+)/playlists/(\d+)', url) or re.search(r'playlist/(\d+)', url)
-                if playlist_match:
-                    if len(playlist_match.groups()) == 2:
-                        username, playlist_id = playlist_match.groups()
-                        playlist = await asyncio.to_thread(client.users_playlists, playlist_id, username)
                     else:
-                        playlist_id = playlist_match.group(1)
-                        playlist = await asyncio.to_thread(client.playlist, playlist_id)
-                    if playlist and playlist.tracks:
-                        for track_data in playlist.tracks:
-                            track = track_data.track
-                            if track:
-                                artist = track.artists[0].name if track.artists else "Unknown"
-                                title = track.title
-                                duration = track.duration_ms // 1000 if track.duration_ms else 0
-                                track_url = f"https://music.yandex.ru/track/{track.id}"
-                                track_name = f"{artist} — {title}"
-                                all_tasks.append({
-                                    'chat_id': chat_id,
-                                    'url': track_url,
-                                    'token': token,
-                                    'artist': artist,
-                                    'title': title,
-                                    'duration': duration,
-                                    'track_name': track_name
-                                })
+                        logger.warning(f"Трек не найден: {url}")
+                elif '/album/' in url and '/track/' not in url:
+                    album_id = re.search(r'album/(\d+)', url).group(1)
+                    album = await asyncio.to_thread(client.albums, album_id)
+                    if album and album.volumes:
+                        for track in album.volumes[0]:
+                            artist = track.artists[0].name if track.artists else "Unknown"
+                            title = track.title
+                            duration = track.duration_ms // 1000 if track.duration_ms else 0
+                            track_url = f"https://music.yandex.ru/track/{track.id}"
+                            track_name = f"{artist} — {title}"
+                            all_tasks.append({
+                                'chat_id': chat_id,
+                                'url': track_url,
+                                'token': token,
+                                'artist': artist,
+                                'title': title,
+                                'duration': duration,
+                                'track_name': track_name
+                            })
                     else:
-                        logger.warning(f"Плейлист не найден или пуст: {url}")
+                        logger.warning(f"Альбом не найден или пуст: {url}")
+                elif '/playlist/' in url:
+                    playlist_match = re.search(r'users/([^/]+)/playlists/(\d+)', url) or re.search(r'playlist/(\d+)', url)
+                    if playlist_match:
+                        if len(playlist_match.groups()) == 2:
+                            username, playlist_id = playlist_match.groups()
+                            playlist = await asyncio.to_thread(client.users_playlists, playlist_id, username)
+                        else:
+                            playlist_id = playlist_match.group(1)
+                            playlist = await asyncio.to_thread(client.playlist, playlist_id)
+                        if playlist and playlist.tracks:
+                            for track_data in playlist.tracks:
+                                track = track_data.track
+                                if track:
+                                    artist = track.artists[0].name if track.artists else "Unknown"
+                                    title = track.title
+                                    duration = track.duration_ms // 1000 if track.duration_ms else 0
+                                    track_url = f"https://music.yandex.ru/track/{track.id}"
+                                    track_name = f"{artist} — {title}"
+                                    all_tasks.append({
+                                        'chat_id': chat_id,
+                                        'url': track_url,
+                                        'token': token,
+                                        'artist': artist,
+                                        'title': title,
+                                        'duration': duration,
+                                        'track_name': track_name
+                                    })
+                        else:
+                            logger.warning(f"Плейлист не найден или пуст: {url}")
+                    else:
+                        logger.warning(f"Не удалось распознать плейлист: {url}")
                 else:
-                    logger.warning(f"Не удалось распознать плейлист: {url}")
-            else:
-                logger.warning(f"Неизвестный тип ссылки: {url}")
-        except Exception as e:
-            logger.error(f"Ошибка обработки ссылки {url}: {e}")
+                    logger.warning(f"Неизвестный тип ссылки: {url}")
+            except Exception as e:
+                logger.error(f"Ошибка обработки ссылки {url}: {e}")
 
-    if not all_tasks:
-        await context.bot.send_message(chat_id=chat_id, text="❌ Не удалось найти треки по твоим ссылкам.")
-        return
+        if not all_tasks:
+            await context.bot.send_message(chat_id=chat_id, text="❌ Не удалось найти треки по твоим ссылкам.")
+            return
 
-    total = len(all_tasks)
-    queue_position = download_queue.qsize() + 1
-    msg_text = f"📥 Приняла запрос на {get_plural_tracks(total)}. Твоя позиция в очереди: {queue_position}"
-    if worker_busy:
-        msg_text += f"\n🎸 Сейчас я немного занята, но скоро начну скачивать твои треки."
-    await context.bot.send_message(chat_id=chat_id, text=msg_text)
+        total = len(all_tasks)
+        queue_position = download_queue.qsize() + 1
+        msg_text = f"📥 Приняла запрос на {get_plural_tracks(total)}. Твоя позиция в очереди: {queue_position}"
+        if worker_busy:
+            msg_text += f"\n🎸 Сейчас я немного занята, но скоро начну скачивать твои треки."
+        await context.bot.send_message(chat_id=chat_id, text=msg_text)
 
-    for idx, task in enumerate(all_tasks):
-        task['index'] = idx + 1
-        task['total'] = total
-        await download_queue.put(task)
+        for idx, task in enumerate(all_tasks):
+            task['index'] = idx + 1
+            task['total'] = total
+            await download_queue.put(task)
 
-    active_tasks_count += len(all_tasks)
+        global active_tasks_count
+        active_tasks_count += len(all_tasks)
+
+    except Exception as e:
+        logger.error(f"Критическая ошибка в process_accumulated_links: {e}", exc_info=True)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ Произошла внутренняя ошибка при обработке ссылок. Попробуйте позже.\n"
+                 f"Ошибка: {str(e)[:200]}"
+        )
 
 async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
