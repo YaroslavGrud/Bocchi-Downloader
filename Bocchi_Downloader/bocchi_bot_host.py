@@ -1,10 +1,10 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
-# ИСПРАВЛЕННАЯ ВЕРСИЯ:
-# - Обработка альбомов с несколькими томами (volumes)
-# - Универсальный парсинг ссылок (track/album/playlist, включая handlers/playlist.jsx)
-# - Корректное извлечение базового URL с сохранением регионального домена
-# - Защита от потери ссылок из-за параметров
+# ФИНАЛЬНАЯ СТАБИЛЬНАЯ ВЕРСИЯ:
+# - Добавлено сжатие обложек для Telegram (Pillow)
+# - Исправлен парсинг альбомов (все тома)
+# - Универсальный парсинг ссылок (включая handlers/playlist.jsx)
+# - Корректный extract_base_url с сохранением домена
 # - Падение качества при нехватке памяти
 # - Отправка аудио с fallback на документ
 
@@ -19,10 +19,10 @@ import urllib.parse
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+import io
 
 import requests
 import psutil
-from catboxpy import AsyncCatboxClient, LitterboxClient
 from dotenv import load_dotenv
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
@@ -38,6 +38,7 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, filters
 )
 from yandex_music import Client
+from PIL import Image
 
 load_dotenv()
 
@@ -153,6 +154,41 @@ def fetch_metadata_from_itunes(artist, title):
         logger.error(f"Ошибка iTunes: {e}")
     return {}
 
+def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> bytes | None:
+    """Сжимает обложку до указанного максимального размера (по умолчанию 200 KB)."""
+    if not cover_bytes or len(cover_bytes) <= max_size_bytes:
+        return cover_bytes
+    try:
+        img = Image.open(io.BytesIO(cover_bytes))
+        if img.mode in ('RGBA', 'P'):
+            img = img.convert('RGB')
+        # Пробуем уменьшить качество JPEG
+        quality = 85
+        while quality >= 30:
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=quality, optimize=True)
+            if output.tell() <= max_size_bytes:
+                return output.getvalue()
+            quality -= 10
+        # Уменьшаем размеры
+        for scale in [0.75, 0.5, 0.3]:
+            new_size = (int(img.width * scale), int(img.height * scale))
+            resized = img.resize(new_size, Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            resized.save(output, format='JPEG', quality=75, optimize=True)
+            if output.tell() <= max_size_bytes:
+                return output.getvalue()
+        # Финальная попытка с очень низким качеством
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=20, optimize=True)
+        if output.tell() <= max_size_bytes:
+            return output.getvalue()
+        logger.warning(f"Не удалось сжать обложку: исходный размер {len(cover_bytes)} байт, минимальный {output.tell()}")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка сжатия обложки: {e}")
+        return None
+
 def cleanup_old_tmp_dirs():
     count = 0
     for tmp_dir in Path('.').glob('bocchi_tmp_*'):
@@ -207,10 +243,7 @@ def set_user_quality(context: ContextTypes.DEFAULT_TYPE, quality: int):
     return False
 
 def extract_base_url(url: str) -> str:
-    """
-    Извлекает базовый URL для Яндекс.Музыки, сохраняя оригинальный домен.
-    Возвращает строку вида: https://music.yandex.ru  или https://yandex.ru/music
-    """
+    """Извлекает базовый URL для Яндекс.Музыки, сохраняя оригинальный домен."""
     match = re.match(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3})(?:/music)?', url, re.IGNORECASE)
     if match:
         base_domain = match.group(1)
@@ -259,48 +292,11 @@ def parse_yandex_url(url: str):
 
     return (None, None, None)
 
-def extract_cover_from_audio(file_path: Path) -> bytes:
-    """Извлекает обложку, но если она больше 200KB, возвращает None."""
-    try:
-        audio = File(file_path)
-        if audio is None:
-            return None
-        cover_data = None
-        if hasattr(audio, 'tags') and 'APIC:' in audio.tags:
-            for tag in audio.tags.values():
-                if isinstance(tag, APIC):
-                    cover_data = tag.data
-                    break
-        elif hasattr(audio, 'tags') and 'covr' in audio.tags:
-            cover_data = audio.tags['covr'][0]
-            if isinstance(cover_data, MP4Cover):
-                cover_data = bytes(cover_data)
-        if cover_data and len(cover_data) > 200 * 1024:
-            logger.warning(f"Обложка слишком большая ({len(cover_data)} байт), пропускаем.")
-            return None
-        return cover_data
-    except Exception as e:
-        logger.warning(f"Не удалось извлечь обложку: {e}")
-        return None
-
-# --- АНИМИРОВАННАЯ ОТПРАВКА ---
-async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
-    draft_id = int(time.time() * 1000) + random.randint(1, 10000)
-    for attempt in range(max_retries):
-        try:
-            await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
-            await asyncio.sleep(delay)
-            msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            try:
-                await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-            except Exception:
-                pass
-            return msg
-        except Exception as e:
-            logger.warning(f"Анимация {attempt+1}: {e}")
-            if attempt == max_retries - 1:
-                return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            await asyncio.sleep(0.5 * (attempt + 1))
+# --- АНИМИРОВАННАЯ ОТПРАВКА (без черновиков, т.к. их нет в PTB) ---
+async def send_animated_message(bot, chat_id, text, **kwargs):
+    """Имитирует анимацию через send_chat_action."""
+    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    await asyncio.sleep(0.3)
     return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -711,7 +707,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     global active_tasks_count
     active_tasks_count += len(all_tasks)
 
-# --- ВОРКЕР (с fallback отправки) ---
+# --- ВОРКЕР (с fallback отправки и сжатием обложек) ---
 async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
@@ -832,8 +828,6 @@ async def worker_loop(app):
                         # --- Обработка скачанных файлов ---
                         files = [f for f in tmp_dir.rglob('*') if f.suffix.lower() in ['.mp3', '.m4a']]
                         for f_path in files:
-                            file_size_mb = f_path.stat().st_size / (1024 * 1024)
-
                             artist = task.get('artist')
                             title = task.get('title')
                             duration = task.get('duration', 0)
@@ -866,22 +860,22 @@ async def worker_loop(app):
                                     title = "Неизвестный трек"
 
                             display_name = f"{artist} — {title}"
+                            safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
 
                             # LRC-текст
                             lyrics = None
                             base_name = f_path.stem
                             lrc_files = list(tmp_dir.glob(f"{base_name}.lrc"))
                             if lrc_files:
-                                lrc_file = lrc_files[0]
                                 try:
-                                    with open(lrc_file, 'r', encoding='utf-8') as f:
+                                    with open(lrc_files[0], 'r', encoding='utf-8') as f:
                                         lyrics = f.read().strip()
                                 except Exception as e:
                                     logger.warning(f"Ошибка чтения LRC: {e}")
 
                             itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
 
-                            # Запись дополнительных тегов
+                            # Запись дополнительных тегов (включая обложку в файл)
                             try:
                                 if f_path.suffix.lower() == '.m4a':
                                     audio = MP4(f_path)
@@ -913,7 +907,6 @@ async def worker_loop(app):
                                 logger.error(f"Ошибка записи тегов: {tag_e}")
 
                             # Переименование
-                            safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
                             new_f_path = f_path.with_name(safe_filename)
                             try:
                                 f_path.rename(new_f_path)
@@ -933,7 +926,9 @@ async def worker_loop(app):
                                                            text=f"❌ Не найден файл {display_name}.")
                                 continue
 
-                            cover_bytes = extract_cover_from_audio(f_path)
+                            # Сжатие обложки для отправки в Telegram
+                            cover_bytes_raw = itunes_data.get('cover_bytes')
+                            thumbnail = compress_cover(cover_bytes_raw) if cover_bytes_raw else None
 
                             # --- ОТПРАВКА С FALLBACK ---
                             sent = False
@@ -949,7 +944,7 @@ async def worker_loop(app):
                                         title=title,
                                         duration=duration if duration > 0 else None,
                                         filename=safe_filename,
-                                        thumbnail=cover_bytes,
+                                        thumbnail=thumbnail,
                                         read_timeout=600, write_timeout=600,
                                         connect_timeout=600, pool_timeout=600
                                     )
@@ -959,7 +954,7 @@ async def worker_loop(app):
                                 last_error = e
                                 logger.error(f"Ошибка send_audio: {e}, пробую отправить как документ")
 
-                            # Попытка 2: отправить как документ (если аудио не удалось)
+                            # Попытка 2: отправить как документ
                             if not sent:
                                 try:
                                     with open(f_path, 'rb') as f:
