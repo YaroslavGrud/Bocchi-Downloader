@@ -40,7 +40,7 @@ if not TELEGRAM_TOKEN:
     raise ValueError("❌ TELEGRAM_TOKEN не задан!")
 
 DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")
-STATS_FILE = os.getenv("STATS_FILE", "stats.txt")
+STATS_FILE = os.getenv("STATS_FILE", "../stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))

@@ -39,7 +39,7 @@ logger = logging.getLogger("BocchiStation")
 # --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
 DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")
-STATS_FILE = os.getenv("STATS_FILE", "stats.txt")
+STATS_FILE = os.getenv("STATS_FILE", "../stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))  # 10 минут
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))    # 24 часа
