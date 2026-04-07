@@ -25,7 +25,7 @@ RUN echo 'aiofiles==25.1.0' >> requirements.txt && \
     echo 'idna==3.11' >> requirements.txt && \
     echo 'multidict==6.7.1' >> requirements.txt && \
     echo 'mutagen==1.47.0' >> requirements.txt && \
-    echo 'Pillow==11.0.0' >> requirements.txt && \
+    echo 'Pillow==12.1.1' >> requirements.txt && \
     echo 'propcache==0.4.1' >> requirements.txt && \
     echo 'psutil==7.2.2' >> requirements.txt && \
     echo 'pycryptodome==3.23.0' >> requirements.txt && \
