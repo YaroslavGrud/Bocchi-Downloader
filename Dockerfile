@@ -1,82 +1,71 @@
 FROM python:3.11-slim
 
+# Установка ffmpeg (обязательно для аудио/видео)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-COPY requirements.txt .
-# Очищаем BOM и невидимые символы из requirements.txt
-RUN sed -i 's/^\xEF\xBB\xBF//' requirements.txt 2>/dev/null || true && \
-    sed -i 's/^\xFF\xFE//' requirements.txt 2>/dev/null || true && \
-    sed -i 's/^\xFE\xFF//' requirements.txt 2>/dev/null || true && \
-    tr -d '\r\0' < requirements.txt > requirements.txt.tmp && mv requirements.txt.tmp requirements.txt 2>/dev/null || true
-# Проверяем, что requirements.txt скопирован
-RUN cat requirements.txt && echo '--- Requirements.txt содержимое выше ---'
-# Устанавливаем зависимости из requirements.txt
-# Пропускаем aiogram если он есть - установим правильную версию отдельно
-RUN set -e && \
-    echo 'Начинаем установку зависимостей из requirements.txt...' && \
-    if [ ! -f requirements.txt ] || [ ! -s requirements.txt ]; then \
-        echo 'WARNING: requirements.txt пуст или не существует'; \
-    else \
-        while IFS= read -r line || [ -n "$line" ]; do \
-            [ -z "$line" ] && continue; \
-            # Очищаем BOM и невидимые символы, обрезаем пробелы \
-            line=$(echo "$line" | sed 's/^\xEF\xBB\xBF//' | sed 's/^\xFF\xFE//' | sed 's/^\xFE\xFF//' | tr -d '\r\0' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); \
-            [ -z "$line" ] && continue; \
-            case "$line" in \
-              \#*) continue ;; \
-            esac; \
-            echo "=== Устанавливаем: $line ===" && \
-            if echo "$line" | grep -qiE '^(sqlite3|json|os|sys|time|datetime|re|random|math|logging|asyncio|collections|itertools|functools|operator|pathlib|urllib|http|socket|ssl|hashlib|base64|uuid|threading|multiprocessing|queue|concurrent|subprocess|shutil|tempfile|pickle|copy|weakref|gc|ctypes|struct|array|binascii|codecs|encodings|locale|gettext|argparse|configparser|csv|io|textwrap|string|unicodedata|readline|rlcompleter)$'; then \
-                echo "ℹ️  Пропускаем встроенный модуль Python: $line (не требует установки)"; \
-                continue; \
-            fi && \
-            if echo "$line" | grep -qiE '(python-dotenv|tgcrypto).*=='; then \
-                if ! pip install --no-cache-dir "$line"; then \
-                    echo "WARNING: Не удалось установить $line (возможно несуществующая версия)"; \
-                    # Пробуем установить без версии \
-                    pkg_name=$(echo "$line" | sed 's/[<>=!].*//' | xargs); \
-                    echo "Пробуем установить $pkg_name без версии..."; \
-                    pip install --no-cache-dir "$pkg_name" || echo "WARNING: Не удалось установить $pkg_name даже без версии"; \
-                else \
-                    echo "✅ Успешно установлен: $line"; \
-                fi; \
-            else \
-                if ! pip install --no-cache-dir "$line"; then \
-                    echo "ERROR: Не удалось установить $line" && exit 1; \
-                else \
-                    echo "✅ Успешно установлен: $line"; \
-                fi; \
-            fi; \
-        done < requirements.txt; \
-    fi && \
-    echo 'Установка завершена' && \
-    echo '=== Проверка установленных пакетов ===' && \
-    (pip list 2>/dev/null | grep -E '(aiogram|dotenv|telegram|requests|supabase)' || echo 'WARNING: Некоторые модули не найдены') && \
-    echo '=== Проверка python-dotenv ===' && \
-    (pip show python-dotenv >/dev/null 2>&1 && echo '✅ python-dotenv установлен' || echo '❌ python-dotenv НЕ установлен')
+# Создаём правильный requirements.txt (на основе предоставленного списка)
+RUN echo 'aiofiles==25.1.0' >> requirements.txt && \
+    echo 'aiohappyeyeballs==2.6.1' >> requirements.txt && \
+    echo 'aiohttp==3.13.5' >> requirements.txt && \
+    echo 'aiosignal==1.4.0' >> requirements.txt && \
+    echo 'anyio==4.13.0' >> requirements.txt && \
+    echo 'APScheduler==3.11.2' >> requirements.txt && \
+    echo 'attrs==26.1.0' >> requirements.txt && \
+    echo 'catboxpy==0.1.1.1' >> requirements.txt && \
+    echo 'certifi==2026.2.25' >> requirements.txt && \
+    echo 'charset-normalizer==3.4.7' >> requirements.txt && \
+    echo 'frozenlist==1.8.0' >> requirements.txt && \
+    echo 'h11==0.16.0' >> requirements.txt && \
+    echo 'httpcore==1.0.9' >> requirements.txt && \
+    echo 'httpx==0.28.1' >> requirements.txt && \
+    echo 'idna==3.11' >> requirements.txt && \
+    echo 'multidict==6.7.1' >> requirements.txt && \
+    echo 'mutagen==1.47.0' >> requirements.txt && \
+    echo 'Pillow==12.1.1' >> requirements.txt && \
+    echo 'propcache==0.4.1' >> requirements.txt && \
+    echo 'psutil==7.2.2' >> requirements.txt && \
+    echo 'pycryptodome==3.23.0' >> requirements.txt && \
+    echo 'PySocks==1.7.1' >> requirements.txt && \
+    echo 'python-dotenv==1.2.2' >> requirements.txt && \
+    echo 'python-telegram-bot==22.7' >> requirements.txt && \
+    echo 'requests==2.33.1' >> requirements.txt && \
+    echo 'StrEnum==0.4.15' >> requirements.txt && \
+    echo 'typing_extensions==4.15.0' >> requirements.txt && \
+    echo 'tzdata==2026.1' >> requirements.txt && \
+    echo 'tzlocal==5.3.1' >> requirements.txt && \
+    echo 'urllib3==2.6.3' >> requirements.txt && \
+    echo 'yandex-music @ https://github.com/llistochek/yandex-music-api/archive/9623fbca7704f47766614efe51d66c9fd496714c.zip#sha256=44c897892a8a6463246b5dc18c340ddb0f25a312b12b1727820de8387235c857' >> requirements.txt && \
+    echo 'yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip#sha256=16ebe9e4b6ac1b4f88c6eb64ad9bf7d101f103f7ffd060a6f9f09ef4103eb323' >> requirements.txt && \
+    echo 'yarl==1.23.0' >> requirements.txt
+    
+# Установка зависимостей
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Проверяем, что aiogram 3.x установлен правильно
-RUN python -c 'from aiogram.client.default import DefaultBotProperties; print("✅ aiogram 3.x установлен правильно")' 2>/dev/null || echo '⚠️ Проверка aiogram 3.x не прошла, но это может быть нормально'
-RUN pip cache purge || true
-# Проверяем, что python-telegram-bot установлен (используется в коде)
-RUN python -c 'import telegram' 2>/dev/null || (echo 'ERROR: python-telegram-bot используется в коде, но не установлен. Добавьте его в requirements.txt!' && exit 1)
-
-# Проверяем, что python-dotenv установлен (используется в коде)
-RUN python -c 'import dotenv' 2>/dev/null || (echo '⚠️ python-dotenv не установлен, устанавливаем автоматически...' && pip install --no-cache-dir python-dotenv>=1.0.0 && python -c 'import dotenv' && echo '✅ python-dotenv установлен' || echo '❌ Не удалось установить python-dotenv')
-
-# Очищаем pip кеш
-RUN pip cache purge || true
-
-# Копируем код приложения
+# Копируем исходный код репозитория (как есть, с main.py в корне)
 COPY . .
 
-# Директория для постоянных данных: БД, файлы состояния, логи.
-# Монтируется как Docker volume — данные сохраняются при перезапуске.
-# В коде бота используйте: import os; DATA_DIR = os.getenv('DATA_DIR', '/app/data')
-ENV DATA_DIR=/app/data
-RUN mkdir -p /app/data && chmod 777 /app/data
-RUN chown -R $(id -u):$(id -g) /app/data 2>/dev/null || chown -R 1000:1000 /app/data || true
+# Создаём нужную структуру внутри контейнера:
+#   - папку Bocchi_Downloader
+#   - перемещаем туда все исходники (handlers, keyboards, states, main.py)
+#   - создаём bocchi_bot_host.py как копию main.py
+RUN mkdir -p /app/Bocchi_Downloader && \
+    mv main.py handlers keyboards states /app/Bocchi_Downloader/ 2>/dev/null || true && \
+    cp /app/Bocchi_Downloader/main.py /app/Bocchi_Downloader/bocchi_bot_host.py
 
+# Добавляем корень /app в PYTHONPATH, чтобы импорты "from handlers import ..." работали
+ENV PYTHONPATH=/app
 
-# Определяем точку входа
-CMD ["python", "bocchi_bot_host.py"]
+# Создаём рабочие папки (для загрузок, данных, временных файлов)
+RUN mkdir -p /app/data /app/downloads /app/temp && chmod 777 /app/data /app/downloads /app/temp
+
+# Проверяем, что точка входа создалась
+RUN if [ ! -f "/app/Bocchi_Downloader/bocchi_bot_host.py" ]; then \
+        echo "❌ Ошибка: не удалось создать bocchi_bot_host.py" && exit 1; \
+    fi
+
+# Запуск бота
+CMD ["python", "/app/Bocchi_Downloader/bocchi_bot_host.py"]
