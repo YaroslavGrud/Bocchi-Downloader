@@ -1,6 +1,12 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
-# Исправленная версия: обработка альбомов (list object has no attribute 'volumes') + защита плейлистов
+# ИСПРАВЛЕННАЯ ВЕРСИЯ:
+# - Обработка альбомов с несколькими томами (volumes)
+# - Универсальный парсинг ссылок (track/album/playlist, включая handlers/playlist.jsx)
+# - Корректное извлечение базового URL с сохранением регионального домена
+# - Защита от потери ссылок из-за параметров
+# - Падение качества при нехватке памяти
+# - Отправка аудио с fallback на документ
 
 import asyncio
 import logging
@@ -12,6 +18,7 @@ import time
 import urllib.parse
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 import requests
 import psutil
@@ -97,7 +104,8 @@ main_menu_keyboard = [
 ]
 main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
+
 def is_message_too_old(update: Update) -> bool:
     if update.message:
         return update.message.date.timestamp() < BOT_START_TIME
@@ -199,14 +207,60 @@ def set_user_quality(context: ContextTypes.DEFAULT_TYPE, quality: int):
     return False
 
 def extract_base_url(url: str) -> str:
-    """Извлекает базовый URL (схема + домен + опционально /music) из ссылки Яндекс.Музыки."""
-    match = re.match(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?)', url)
+    """
+    Извлекает базовый URL для Яндекс.Музыки, сохраняя оригинальный домен.
+    Возвращает строку вида: https://music.yandex.ru  или https://yandex.ru/music
+    """
+    match = re.match(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3})(?:/music)?', url, re.IGNORECASE)
     if match:
-        return match.group(1)
+        base_domain = match.group(1)
+        if '/music' in url or re.search(r'//music\.', url, re.IGNORECASE):
+            return base_domain
+        return f"{base_domain}/music"
+    logger.warning(f"Не удалось извлечь домен из URL: {url}, использую fallback")
     return "https://music.yandex.ru"
 
+def parse_yandex_url(url: str):
+    """
+    Определяет тип контента и извлекает ID.
+    Возвращает (type, id, username) где type: 'track', 'album', 'playlist'
+    """
+    parsed = urlparse(url)
+    path = parsed.path
+    query = parse_qs(parsed.query)
+
+    # Трек
+    track_match = re.search(r'/track/(\d+)', path)
+    if track_match:
+        return ('track', track_match.group(1), None)
+
+    # Альбом (без track в пути)
+    if '/album/' in path and '/track/' not in path:
+        album_match = re.search(r'/album/(\d+)', path)
+        if album_match:
+            return ('album', album_match.group(1), None)
+
+    # Плейлист: /users/username/playlists/123
+    playlist_match = re.search(r'/users/([^/]+)/playlists/(\d+)', path)
+    if playlist_match:
+        return ('playlist', playlist_match.group(2), playlist_match.group(1))
+
+    # Плейлист: /playlist/123
+    playlist_match2 = re.search(r'/playlist/(\d+)', path)
+    if playlist_match2:
+        return ('playlist', playlist_match2.group(1), None)
+
+    # Плейлист: handlers/playlist.jsx?owner=xxx&kinds=yyy
+    if 'handlers/playlist.jsx' in path:
+        owner = query.get('owner', [None])[0]
+        kinds = query.get('kinds', [None])[0]
+        if owner and kinds:
+            return ('playlist', kinds, owner)
+
+    return (None, None, None)
+
 def extract_cover_from_audio(file_path: Path) -> bytes:
-    """Извлекает обложку, но если она больше 200KB, возвращает None (Telegram не примет)."""
+    """Извлекает обложку, но если она больше 200KB, возвращает None."""
     try:
         audio = File(file_path)
         if audio is None:
@@ -480,7 +534,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TOKEN
 
     content = (update.message.text or "") + " " + (update.message.caption or "")
-    urls = re.findall(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?/(?:track|album|playlist)/[0-9]+(?:[?&][^\s]*)?)', content)
+    urls = re.findall(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?/(?:track|album|playlist|handlers/playlist\.jsx)[^\s]*)', content)
     if not urls:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -521,7 +575,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
-# --- ПРОЦЕССОР ССЫЛОК (с исправлением для альбомов и плейлистов) ---
+# --- ПРОЦЕССОР ССЫЛОК (с исправлениями) ---
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
@@ -547,19 +601,15 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     all_tasks = []
     for url in raw_links:
         base_url = extract_base_url(url)
+        content_type, content_id, username = parse_yandex_url(url)
+
+        if not content_type:
+            await context.bot.send_message(chat_id, f"❌ Не удалось распознать ссылку: {url}")
+            continue
+
         try:
-            if '/track/' in url:
-                match = re.search(r'track/(\d+)', url)
-                if not match:
-                    continue
-                track_id = match.group(1)
-                try:
-                    # tracks() всегда ожидает список
-                    tracks_info = await asyncio.to_thread(client.tracks, [track_id])
-                except Exception as e:
-                    logger.error(f"Ошибка получения трека {track_id}: {e}")
-                    await context.bot.send_message(chat_id, f"❌ Не удалось получить данные трека: {url}\nОшибка: {str(e)[:100]}")
-                    continue
+            if content_type == 'track':
+                tracks_info = await asyncio.to_thread(client.tracks, [content_id])
                 if tracks_info and len(tracks_info) > 0:
                     t = tracks_info[0]
                     artist = t.artists[0].name if t.artists else "Неизвестен"
@@ -577,87 +627,67 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     })
                 else:
                     await context.bot.send_message(chat_id, f"❌ Трек не найден: {url}")
-                    continue
 
-            elif '/album/' in url and '/track/' not in url:
-                match = re.search(r'album/(\d+)', url)
-                if not match:
-                    continue
-                album_id = match.group(1)
-                try:
-                    # albums() всегда возвращает список, даже для одного альбома
-                    albums_data = await asyncio.to_thread(client.albums, [album_id])
-                except Exception as e:
-                    logger.error(f"Ошибка получения альбома {album_id}: {e}")
-                    await context.bot.send_message(chat_id, f"❌ Не удалось получить альбом: {url}\nОшибка: {str(e)[:100]}")
-                    continue
-
+            elif content_type == 'album':
+                albums_data = await asyncio.to_thread(client.albums, [content_id])
                 if not albums_data or len(albums_data) == 0:
                     await context.bot.send_message(chat_id, f"❌ Альбом не найден: {url}")
                     continue
-
                 album = albums_data[0]
-                if album and album.volumes:
-                    for track in album.volumes[0]:
-                        artist = track.artists[0].name if track.artists else "Неизвестен"
-                        title = track.title
-                        duration = track.duration_ms // 1000 if track.duration_ms else 0
-                        track_url = f"{base_url}/track/{track.id}"
-                        all_tasks.append({
-                            'chat_id': chat_id,
-                            'url': track_url,
-                            'token': token,
-                            'artist': artist,
-                            'title': title,
-                            'duration': duration,
-                            'track_name': f"{artist} — {title}",
-                            'quality': get_user_quality(context)
-                        })
-                else:
+                tracks_found = False
+                if album and hasattr(album, 'volumes') and album.volumes:
+                    for volume in album.volumes:
+                        if not volume:
+                            continue
+                        for track in volume:
+                            tracks_found = True
+                            artist = track.artists[0].name if track.artists else "Неизвестен"
+                            title = track.title
+                            duration = track.duration_ms // 1000 if track.duration_ms else 0
+                            track_url = f"{base_url}/track/{track.id}"
+                            all_tasks.append({
+                                'chat_id': chat_id,
+                                'url': track_url,
+                                'token': token,
+                                'artist': artist,
+                                'title': title,
+                                'duration': duration,
+                                'track_name': f"{artist} — {title}",
+                                'quality': get_user_quality(context)
+                            })
+                if not tracks_found:
                     await context.bot.send_message(chat_id, f"❌ Альбом пуст или не содержит треков: {url}")
 
-            elif '/playlist/' in url:
-                playlist_match = re.search(r'users/([^/]+)/playlists/(\d+)', url) or re.search(r'playlist/(\d+)', url)
-                if playlist_match:
-                    try:
-                        if len(playlist_match.groups()) == 2:
-                            username, playlist_id = playlist_match.groups()
-                            playlist_data = await asyncio.to_thread(client.users_playlists, playlist_id, username)
-                        else:
-                            playlist_id = playlist_match.group(1)
-                            playlist_data = await asyncio.to_thread(client.playlist, playlist_id)
+            elif content_type == 'playlist':
+                if username:
+                    playlist_data = await asyncio.to_thread(client.users_playlists, content_id, username)
+                else:
+                    playlist_data = await asyncio.to_thread(client.playlist, content_id)
+                if isinstance(playlist_data, list) and len(playlist_data) > 0:
+                    playlist = playlist_data[0]
+                else:
+                    playlist = playlist_data
+                if playlist and hasattr(playlist, 'tracks') and playlist.tracks:
+                    for track_data in playlist.tracks:
+                        track = track_data.track
+                        if track:
+                            artist = track.artists[0].name if track.artists else "Неизвестен"
+                            title = track.title
+                            duration = track.duration_ms // 1000 if track.duration_ms else 0
+                            track_url = f"{base_url}/track/{track.id}"
+                            all_tasks.append({
+                                'chat_id': chat_id,
+                                'url': track_url,
+                                'token': token,
+                                'artist': artist,
+                                'title': title,
+                                'duration': duration,
+                                'track_name': f"{artist} — {title}",
+                                'quality': get_user_quality(context)
+                            })
+                else:
+                    await context.bot.send_message(chat_id, f"❌ Плейлист не найден или пуст: {url}")
 
-                        # Некоторые методы могут возвращать список, некоторые объект – унифицируем
-                        if isinstance(playlist_data, list) and len(playlist_data) > 0:
-                            playlist = playlist_data[0]
-                        else:
-                            playlist = playlist_data
-
-                    except Exception as e:
-                        logger.error(f"Ошибка получения плейлиста: {e}")
-                        await context.bot.send_message(chat_id, f"❌ Не удалось получить плейлист: {url}\nОшибка: {str(e)[:100]}")
-                        continue
-
-                    if playlist and hasattr(playlist, 'tracks') and playlist.tracks:
-                        for track_data in playlist.tracks:
-                            track = track_data.track
-                            if track:
-                                artist = track.artists[0].name if track.artists else "Неизвестен"
-                                title = track.title
-                                duration = track.duration_ms // 1000 if track.duration_ms else 0
-                                track_url = f"{base_url}/track/{track.id}"
-                                all_tasks.append({
-                                    'chat_id': chat_id,
-                                    'url': track_url,
-                                    'token': token,
-                                    'artist': artist,
-                                    'title': title,
-                                    'duration': duration,
-                                    'track_name': f"{artist} — {title}",
-                                    'quality': get_user_quality(context)
-                                })
-                    else:
-                        await context.bot.send_message(chat_id, f"❌ Плейлист не найден или пуст: {url}")
         except Exception as e:
             logger.error(f"Ошибка парсинга {url}: {e}")
             await context.bot.send_message(chat_id, f"❌ Ошибка при обработке ссылки {url}: {str(e)[:100]}")
@@ -681,7 +711,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     global active_tasks_count
     active_tasks_count += len(all_tasks)
 
-# --- ВОРКЕР (с fallback отправки и удалением папки только после отправки) ---
+# --- ВОРКЕР (с fallback отправки) ---
 async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
