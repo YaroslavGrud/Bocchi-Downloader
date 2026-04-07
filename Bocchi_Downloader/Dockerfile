@@ -1,10 +1,10 @@
-# Базовый образ Python 3.11 Slim-Alpine
+# Базовый образ Python 3.11 на Alpine Linux
 FROM python:3.11-slim-alpine AS base
 
 # Этап сборки yandex-music-downloader
 FROM base AS builder
 
-# Установка необходимых инструментов для компиляции Rust
+# Установка инструментов для сборки Rust-приложений
 RUN apk add --no-cache \
     build-base \
     cargo \
@@ -13,7 +13,7 @@ RUN apk add --no-cache \
     musl-dev \
     rust
 
-# Клонирование и сборка yandex-music-downloader
+# Сборка yandex-music-downloader
 RUN git clone https://github.com/llistochek/yandex-music-downloader.git && \
     cd yandex-music-downloader && \
     cargo build --release && \
@@ -22,14 +22,14 @@ RUN git clone https://github.com/llistochek/yandex-music-downloader.git && \
 # Этап установки Python-зависимостей
 FROM base AS dependencies
 
-# Установка Python-зависимостей из requirements.txt
+# Установка Python-библиотек
 COPY requirements.txt /tmp/
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Итоговая сборка образа
 FROM base AS final
 
-# Копирование собранного бинарника yandex-music-downloader и установленных Python-пакетов
+# Копирование собранного бинарника и установленных пакетов
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin/yandex-music-downloader /usr/local/bin/
 
@@ -40,7 +40,10 @@ RUN apk add --no-cache tzdata
 WORKDIR /app
 COPY . .
 
-# Определение переменных окружения
+# Проверка наличия файла перед запуском
+RUN if [ ! -f "/app/bocchi_bot_host.py" ]; then echo "❗ Ошибка: файл bocchi_bot_host.py не обнаружен!" && exit 1; fi
+
+# Переменные окружения
 ENV PYTHONUNBUFFERED=1
 ENV TELEGRAM_TOKEN="${TELEGRAM_TOKEN}"
 ENV DOWNLOADER_PATH="/usr/local/bin/yandex-music-downloader"
@@ -54,4 +57,4 @@ RUN chmod -R 755 /app && \
 USER nobody
 
 # Команда запуска приложения
-CMD ["python", "main.py"]
+CMD ["python", "/app/bocchi_bot_host.py"]
