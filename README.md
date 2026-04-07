@@ -138,6 +138,7 @@ bocchi_env/bin/python bocchi_bot_android.py
 - [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) — отличный загрузчик для Яндекс.Музыки
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) — мощная библиотека для Telegram ботов
 - [catboxpy](https://github.com/anshonweb/catboxpy) — обёртка для Catbox/Litterbox
+- [Bothost](https://bothost.ru/) в предоставлении хостинг услуг
 - Человеку, что подал идею создать бота (спасибо Yume)
 ---
 
