@@ -43,6 +43,7 @@ STATS_FILE = os.getenv("STATS_FILE", "../stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))  # 10 минут
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))    # 24 часа
+CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))        # таймаут для облака (0 = отключить)
 
 BOT_START_TIME = time.time()
 
@@ -51,10 +52,12 @@ download_semaphore = None
 download_queue = None
 link_accumulators = {}
 user_delay_tasks = {}
+user_processing = {}  # user_id -> bool (идёт ли обработка)
 worker_busy = False
 active_tasks_count = 0
 last_auth_warning = {}
 WARNING_COOLDOWN = 60
+worker_task = None
 
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
@@ -123,7 +126,7 @@ def cleanup_old_tmp_dirs():
             except Exception as e:
                 logger.error(f"Не удалось удалить папку {tmp_dir}: {e}")
     if count:
-        print(f"🎸 Найдено и удалено забытых временных папок: {count}")
+        logger.info(f"Удалено временных папок: {count}")
 
 def add_stats(bytes_added):
     try:
@@ -169,7 +172,6 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
         except Exception as e:
             logger.warning(f"Попытка {attempt+1}/{max_retries} анимации не удалась: {e}")
             if attempt == max_retries - 1:
-                logger.warning(f"send_animated_message fallback после {max_retries} попыток")
                 return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             await asyncio.sleep(0.5 * (attempt + 1))
     return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
@@ -182,270 +184,315 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# --- ВОРКЕР (ЗАГРУЗКА) ---
-async def worker(app):
+# --- ВОРКЕР С ПРОВЕРКОЙ НА БЛОКИРОВКУ ---
+async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
-        task = await download_queue.get()
-        worker_busy = True
-        tmp_dir = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
+        try:
+            if not shutil.which(DOWNLOADER_PATH):
+                logger.error(f"Загрузчик {DOWNLOADER_PATH} не найден. Жду 60 секунд...")
+                await asyncio.sleep(60)
+                continue
 
-        async with download_semaphore:
-            status_msg = None
-            try:
-                tmp_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Воркер запущен")
+            while True:
+                task = await download_queue.get()
+                worker_busy = True
+                tmp_dir = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
 
-                status_msg = await app.bot.send_message(
-                    chat_id=task['chat_id'],
-                    text=f"🌀 Обработка...\n{task['track_name']}"
-                )
-                await app.bot.send_chat_action(chat_id=task['chat_id'], action=ChatAction.TYPING)
-
-                cmd = [
-                    DOWNLOADER_PATH, "--token", task['token'], "--quality", "2",
-                    "--embed-cover", "--dir", str(tmp_dir), "--url", task['url'],
-                    "--path-pattern", "#artist - #title",
-                    "--lyrics-format", "lrc"
-                ]
-
-                max_retries = 3
-                retry_delay = 5
-                success = False
-                for attempt in range(max_retries):
-                    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE,
-                                                                stderr=asyncio.subprocess.PIPE)
+                async with download_semaphore:
+                    status_msg = None
                     try:
-                        await asyncio.wait_for(proc.wait(), timeout=DOWNLOAD_TIMEOUT)
-                        success = True
-                        break
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                        except:
-                            pass
-                        if attempt == max_retries - 1:
-                            await app.bot.send_message(
-                                chat_id=task['chat_id'],
-                                text="Ой... Кажется, я слишком долго пытаюсь это скачать. Сервер молчит, поэтому я вынуждена прерваться, чтобы не заставлять других ждать в очереди 🎸"
+                        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+                        status_msg = await app.bot.send_message(
+                            chat_id=task['chat_id'],
+                            text=f"🌀 Обработка...\n{task['track_name']}"
+                        )
+                        await app.bot.send_chat_action(chat_id=task['chat_id'], action=ChatAction.TYPING)
+
+                        cmd = [
+                            DOWNLOADER_PATH, "--token", task['token'], "--quality", "2",
+                            "--embed-cover", "--dir", str(tmp_dir), "--url", task['url'],
+                            "--path-pattern", "#artist - #title",
+                            "--lyrics-format", "lrc"
+                        ]
+                        logger.info(f"Запуск загрузчика: {' '.join(cmd)}")
+
+                        max_retries = 3
+                        retry_delay = 5
+                        success = False
+                        last_stderr = ""
+                        for attempt in range(max_retries):
+                            proc = await asyncio.create_subprocess_exec(
+                                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                             )
-                        else:
-                            await asyncio.sleep(retry_delay)
-                            continue
-                if not success:
-                    continue
-
-                files = [f for f in tmp_dir.rglob('*') if f.suffix.lower() in ['.mp3', '.m4a']]
-                for f_path in files:
-                    file_size_mb = f_path.stat().st_size / (1024 * 1024)
-
-                    artist = task.get('artist')
-                    title = task.get('title')
-                    duration = task.get('duration', 0)
-
-                    if not artist or not title:
-                        try:
-                            if f_path.suffix == '.m4a':
-                                audio_read = MP4(f_path)
-                                artist = audio_read.get('\xa9ART', ['Unknown'])[0]
-                                title = audio_read.get('\xa9nam', [f_path.stem])[0]
-                                if not duration:
-                                    duration = int(audio_read.info.length)
-                            else:
-                                audio_t, audio_i = EasyID3(f_path), MP3(f_path)
-                                artist = audio_t.get('artist', ['Unknown'])[0]
-                                title = audio_t.get('title', [f_path.stem])[0]
-                                if not duration:
-                                    duration = int(audio_i.info.length)
-                        except Exception as e:
-                            logger.warning(f"Ошибка чтения данных из файла: {e}")
-                            artist = "Unknown"
-                            title = f_path.stem
-
-                    if not task.get('artist'):
-                        artist = artist.replace("#artist", "Unknown").strip()
-                        title = title.replace("#artist", "").replace("#title", "").strip(" -")
-                        if not artist:
-                            artist = "Unknown"
-                        if not title:
-                            title = "Unknown Track"
-
-                    display_name = f"{artist} — {title}"
-
-                    # LRC-текст
-                    lyrics = None
-                    base_name = f_path.stem
-                    lrc_files = list(tmp_dir.glob(f"{base_name}.lrc"))
-                    if lrc_files:
-                        lrc_file = lrc_files[0]
-                        try:
-                            with open(lrc_file, 'r', encoding='utf-8') as f:
-                                lyrics = f.read().strip()
-                            logger.info(f"LRC-текст найден в файле {lrc_file.name}")
-                        except Exception as e:
-                            logger.warning(f"Ошибка чтения LRC-файла: {e}")
-
-                    itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
-
-                    # Запись дополнительных тегов
-                    try:
-                        if f_path.suffix.lower() == '.m4a':
-                            audio = MP4(f_path)
-                            audio['aART'] = [artist]
-                            audio.pop('\xa9cmt', None)
-                            if itunes_data.get('album'): audio['\xa9alb'] = [itunes_data['album']]
-                            if itunes_data.get('year'): audio['\xa9day'] = [str(itunes_data['year'])]
-                            if itunes_data.get('genre'): audio['\xa9gen'] = [itunes_data['genre']]
-                            if lyrics: audio['\xa9lyr'] = [lyrics]
-                            if itunes_data.get('cover_bytes'):
-                                audio['covr'] = [MP4Cover(itunes_data['cover_bytes'], imageformat=MP4Cover.FORMAT_JPEG)]
-                            audio.save()
-                        else:
-                            audio = MP3(f_path, ID3=ID3)
-                            if audio.tags is None:
-                                audio.add_tags()
-                            audio.tags.add(TPE2(encoding=3, text=artist))
-                            audio.tags.delall('COMM')
-                            if itunes_data.get('album'): audio.tags.add(TALB(encoding=3, text=itunes_data['album']))
-                            if itunes_data.get('year'): audio.tags.add(TDRC(encoding=3, text=str(itunes_data['year'])))
-                            if itunes_data.get('genre'): audio.tags.add(TCON(encoding=3, text=itunes_data['genre']))
-                            if lyrics:
-                                audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
-                            if itunes_data.get('cover_bytes'):
-                                audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover',
-                                                    data=itunes_data['cover_bytes']))
-                            audio.save()
-                    except Exception as tag_e:
-                        logger.error(f"Не удалось записать дополнительные теги: {tag_e}")
-
-                    # Переименование
-                    safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
-                    new_f_path = f_path.with_name(safe_filename)
-                    try:
-                        f_path.rename(new_f_path)
-                        f_path = new_f_path
-                    except Exception as e:
-                        logger.error(f"rename не удался: {e}, пробуем shutil.move")
-                        try:
-                            shutil.move(str(f_path), str(new_f_path))
-                            f_path = new_f_path
-                        except Exception as move_e:
-                            logger.error(f"shutil.move тоже не сработал: {move_e}")
-                            await app.bot.send_message(chat_id=task['chat_id'],
-                                                       text=f"❌ Не удалось переименовать файл {display_name}.")
-                            continue
-
-                    if not f_path.exists():
-                        logger.error(f"Файл не найден после переименования: {f_path}")
-                        await app.bot.send_message(chat_id=task['chat_id'],
-                                                   text=f"❌ Не удалось найти файл {display_name}.")
-                        continue
-
-                    # Отправка файла
-                    if file_size_mb > 49.0:
-                        uploaded = False
-                        error_message = ""
-                        if status_msg:
                             try:
-                                await status_msg.edit_text(
-                                    f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на временное облако..."
-                                )
-                            except:
-                                pass
-                        try:
-                            litterbox = LitterboxClient()
-                            url = await asyncio.to_thread(litterbox.upload_file, str(f_path), expire_time="24h")
-                            if url and url.startswith(("https://", "http://")):
-                                await app.bot.send_message(
-                                    chat_id=task['chat_id'],
-                                    text=(f"🎁 Файл {display_name} слишком велик для Telegram.\n"
-                                          f"Вот временная ссылка (действует 24 часа):\n\n🔗 {url}"),
-                                    disable_web_page_preview=True
-                                )
-                                uploaded = True
-                            else:
-                                error_message = "Litterbox вернул не ссылку"
-                        except Exception as e:
-                            error_message = f"Litterbox: {e}"
-                            logger.error(error_message)
-
-                        if not uploaded:
-                            try:
-                                catbox = AsyncCatboxClient()
-                                url = await catbox.upload(str(f_path))
-                                if url and url.startswith(("https://", "http://")):
+                                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=DOWNLOAD_TIMEOUT)
+                                last_stderr = stderr.decode('utf-8', errors='replace')
+                                if proc.returncode == 0:
+                                    success = True
+                                    break
+                                else:
+                                    logger.warning(f"Загрузчик вернул код {proc.returncode}, stderr: {last_stderr[:200]}")
+                                    # Проверяем на блокировку
+                                    if any(keyword in last_stderr.lower() for keyword in ['forbidden', 'blocked', 'denied', 'регион', 'недоступен', 'restricted', '403', 'доступ запрещён']):
+                                        await app.bot.send_message(
+                                            chat_id=task['chat_id'],
+                                            text=f"❌ Яндекc заблокировал скачивание трека **{task['track_name']}**.\n"
+                                                 f"Возможно, трек удалён или недоступен в вашем регионе.\n"
+                                                 f"Попробуйте другой трек или альбом.",
+                                            parse_mode='Markdown'
+                                        )
+                                        success = False
+                                        break  # не продолжаем попытки
+                                    if attempt == max_retries - 1:
+                                        await app.bot.send_message(
+                                            chat_id=task['chat_id'],
+                                            text=f"❌ Не удалось скачать трек **{task['track_name']}**.\nОшибка: {last_stderr[:200]}",
+                                            parse_mode='Markdown'
+                                        )
+                                    else:
+                                        await asyncio.sleep(retry_delay)
+                            except asyncio.TimeoutError:
+                                try:
+                                    proc.kill()
+                                except:
+                                    pass
+                                if attempt == max_retries - 1:
                                     await app.bot.send_message(
                                         chat_id=task['chat_id'],
-                                        text=(f"🎁 Файл {display_name} слишком велик для Telegram.\n"
-                                              f"Вот постоянная ссылка (файл не удалится):\n\n🔗 {url}"),
-                                        disable_web_page_preview=True
+                                        text=f"⏰ Таймаут скачивания трека **{task['track_name']}**. Попробуйте позже.",
+                                        parse_mode='Markdown'
                                     )
-                                    uploaded = True
                                 else:
-                                    error_message = "Catbox вернул не ссылку"
-                            except Exception as e:
-                                error_message = f"Catbox: {e}"
-                                logger.error(error_message)
+                                    await asyncio.sleep(retry_delay)
+                        if not success:
+                            continue
 
-                        if not uploaded:
-                            await app.bot.send_message(chat_id=task['chat_id'],
-                                                       text=f"❌ Не удалось загрузить {display_name}. Ошибка: {error_message}")
-                    else:
-                        try:
-                            with open(f_path, 'rb') as f:
-                                await app.bot.send_audio(
-                                    chat_id=task['chat_id'],
-                                    audio=f,
-                                    performer=artist,
-                                    title=title,
-                                    duration=duration if duration > 0 else None,
-                                    filename=safe_filename,
-                                    read_timeout=600, write_timeout=600,
-                                    connect_timeout=600, pool_timeout=600
-                                )
-                            logger.info(f"Успешно отправлен трек: {display_name}")
-                        except Exception as e:
-                            logger.error(f"Ошибка при отправке аудио {display_name}: {e}", exc_info=True)
-                            await app.bot.send_message(chat_id=task['chat_id'],
-                                                       text=f"❌ Не удалось отправить {display_name}: {str(e)[:200]}")
+                        # Далее идёт обработка найденных файлов (без изменений)
+                        files = [f for f in tmp_dir.rglob('*') if f.suffix.lower() in ['.mp3', '.m4a']]
+                        for f_path in files:
+                            file_size_mb = f_path.stat().st_size / (1024 * 1024)
 
-                    add_stats(f_path.stat().st_size)
+                            artist = task.get('artist')
+                            title = task.get('title')
+                            duration = task.get('duration', 0)
 
-                    # Финальное сообщение для пакета + показываем меню
-                    if task.get('index') == task.get('total'):
-                        try:
-                            await app.bot.send_message(
-                                chat_id=task['chat_id'],
-                                text='Загружено при поддержке #BocchiIsAlive <tg-emoji emoji-id="6041593232423391328">💠</tg-emoji>',
-                                parse_mode='HTML'
-                            )
-                            reply_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
-                            await app.bot.send_message(
-                                chat_id=task['chat_id'],
-                                text="🎸 Все треки обработаны. Выбери следующее действие:",
-                                reply_markup=reply_markup
-                            )
-                        except Exception as e:
-                            logger.error(f"Ошибка отправки финального сообщения или меню: {e}")
+                            if not artist or not title:
+                                try:
+                                    if f_path.suffix == '.m4a':
+                                        audio_read = MP4(f_path)
+                                        artist = audio_read.get('\xa9ART', ['Unknown'])[0]
+                                        title = audio_read.get('\xa9nam', [f_path.stem])[0]
+                                        if not duration:
+                                            duration = int(audio_read.info.length)
+                                    else:
+                                        audio_t, audio_i = EasyID3(f_path), MP3(f_path)
+                                        artist = audio_t.get('artist', ['Unknown'])[0]
+                                        title = audio_t.get('title', [f_path.stem])[0]
+                                        if not duration:
+                                            duration = int(audio_i.info.length)
+                                except Exception as e:
+                                    logger.warning(f"Ошибка чтения данных из файла: {e}")
+                                    artist = "Unknown"
+                                    title = f_path.stem
 
-            except Exception as e:
-                logger.error(f"Worker Error: {e}", exc_info=True)
-                if status_msg:
-                    try:
-                        await status_msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
-                    except:
-                        await app.bot.send_message(chat_id=task['chat_id'], text=f"❌ Ошибка: {str(e)[:200]}")
-                else:
-                    await app.bot.send_message(chat_id=task['chat_id'], text=f"❌ Ошибка: {str(e)[:200]}")
-            finally:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                download_queue.task_done()
-                active_tasks_count -= 1
-                worker_busy = False
-                if status_msg:
-                    try:
-                        await status_msg.delete()
+                            if not task.get('artist'):
+                                artist = artist.replace("#artist", "Unknown").strip()
+                                title = title.replace("#artist", "").replace("#title", "").strip(" -")
+                                if not artist:
+                                    artist = "Unknown"
+                                if not title:
+                                    title = "Unknown Track"
+
+                            display_name = f"{artist} — {title}"
+
+                            # LRC-текст
+                            lyrics = None
+                            base_name = f_path.stem
+                            lrc_files = list(tmp_dir.glob(f"{base_name}.lrc"))
+                            if lrc_files:
+                                lrc_file = lrc_files[0]
+                                try:
+                                    with open(lrc_file, 'r', encoding='utf-8') as f:
+                                        lyrics = f.read().strip()
+                                    logger.info(f"LRC-текст найден в {lrc_file.name}")
+                                except Exception as e:
+                                    logger.warning(f"Ошибка чтения LRC: {e}")
+
+                            itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
+
+                            # Запись тегов
+                            try:
+                                if f_path.suffix.lower() == '.m4a':
+                                    audio = MP4(f_path)
+                                    audio['aART'] = [artist]
+                                    audio.pop('\xa9cmt', None)
+                                    if itunes_data.get('album'): audio['\xa9alb'] = [itunes_data['album']]
+                                    if itunes_data.get('year'): audio['\xa9day'] = [str(itunes_data['year'])]
+                                    if itunes_data.get('genre'): audio['\xa9gen'] = [itunes_data['genre']]
+                                    if lyrics: audio['\xa9lyr'] = [lyrics]
+                                    if itunes_data.get('cover_bytes'):
+                                        audio['covr'] = [MP4Cover(itunes_data['cover_bytes'], imageformat=MP4Cover.FORMAT_JPEG)]
+                                    audio.save()
+                                else:
+                                    audio = MP3(f_path, ID3=ID3)
+                                    if audio.tags is None:
+                                        audio.add_tags()
+                                    audio.tags.add(TPE2(encoding=3, text=artist))
+                                    audio.tags.delall('COMM')
+                                    if itunes_data.get('album'): audio.tags.add(TALB(encoding=3, text=itunes_data['album']))
+                                    if itunes_data.get('year'): audio.tags.add(TDRC(encoding=3, text=str(itunes_data['year'])))
+                                    if itunes_data.get('genre'): audio.tags.add(TCON(encoding=3, text=itunes_data['genre']))
+                                    if lyrics:
+                                        audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
+                                    if itunes_data.get('cover_bytes'):
+                                        audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover',
+                                                            data=itunes_data['cover_bytes']))
+                                    audio.save()
+                            except Exception as tag_e:
+                                logger.error(f"Ошибка записи тегов: {tag_e}")
+
+                            # Переименование
+                            safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
+                            new_f_path = f_path.with_name(safe_filename)
+                            try:
+                                f_path.rename(new_f_path)
+                                f_path = new_f_path
+                            except Exception:
+                                try:
+                                    shutil.move(str(f_path), str(new_f_path))
+                                    f_path = new_f_path
+                                except Exception as move_e:
+                                    logger.error(f"Не удалось переименовать: {move_e}")
+                                    await app.bot.send_message(chat_id=task['chat_id'],
+                                                               text=f"❌ Не удалось переименовать {display_name}.")
+                                    continue
+
+                            if not f_path.exists():
+                                await app.bot.send_message(chat_id=task['chat_id'],
+                                                           text=f"❌ Не найден файл {display_name}.")
+                                continue
+
+                            # Отправка файла (с таймаутом для облака)
+                            if file_size_mb > 49.0:
+                                uploaded = False
+                                error_message = ""
+                                if status_msg:
+                                    try:
+                                        await status_msg.edit_text(
+                                            f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на облако..."
+                                        )
+                                    except:
+                                        pass
+
+                                try:
+                                    litterbox = LitterboxClient()
+                                    upload_coro = asyncio.to_thread(litterbox.upload_file, str(f_path), expire_time="24h")
+                                    if CLOUD_TIMEOUT > 0:
+                                        url = await asyncio.wait_for(upload_coro, timeout=CLOUD_TIMEOUT)
+                                    else:
+                                        url = await upload_coro
+                                    if url and url.startswith(("https://", "http://")):
+                                        await app.bot.send_message(
+                                            chat_id=task['chat_id'],
+                                            text=f"🎁 {display_name} слишком велик для Telegram.\nВременная ссылка (24ч):\n{url}",
+                                            disable_web_page_preview=True
+                                        )
+                                        uploaded = True
+                                    else:
+                                        error_message = "Litterbox вернул не ссылку"
+                                except asyncio.TimeoutError:
+                                    error_message = "Litterbox: таймаут загрузки"
+                                except Exception as e:
+                                    error_message = f"Litterbox: {e}"
+
+                                if not uploaded:
+                                    try:
+                                        catbox = AsyncCatboxClient()
+                                        if CLOUD_TIMEOUT > 0:
+                                            url = await asyncio.wait_for(catbox.upload(str(f_path)), timeout=CLOUD_TIMEOUT)
+                                        else:
+                                            url = await catbox.upload(str(f_path))
+                                        if url and url.startswith(("https://", "http://")):
+                                            await app.bot.send_message(
+                                                chat_id=task['chat_id'],
+                                                text=f"🎁 {display_name} слишком велик для Telegram.\nПостоянная ссылка:\n{url}",
+                                                disable_web_page_preview=True
+                                            )
+                                            uploaded = True
+                                        else:
+                                            error_message = "Catbox вернул не ссылку"
+                                    except asyncio.TimeoutError:
+                                        error_message = "Catbox: таймаут загрузки"
+                                    except Exception as e:
+                                        error_message = f"Catbox: {e}"
+
+                                if not uploaded:
+                                    await app.bot.send_message(chat_id=task['chat_id'],
+                                                               text=f"❌ Не удалось загрузить {display_name}. Ошибка: {error_message}")
+                            else:
+                                try:
+                                    with open(f_path, 'rb') as f:
+                                        await app.bot.send_audio(
+                                            chat_id=task['chat_id'],
+                                            audio=f,
+                                            performer=artist,
+                                            title=title,
+                                            duration=duration if duration > 0 else None,
+                                            filename=safe_filename,
+                                            read_timeout=600, write_timeout=600,
+                                            connect_timeout=600, pool_timeout=600
+                                        )
+                                    logger.info(f"Отправлен трек: {display_name}")
+                                except Exception as e:
+                                    logger.error(f"Ошибка отправки аудио: {e}")
+                                    await app.bot.send_message(chat_id=task['chat_id'],
+                                                               text=f"❌ Не удалось отправить {display_name}: {str(e)[:200]}")
+
+                            add_stats(f_path.stat().st_size)
+
+                            # Финальное сообщение для пакета
+                            if task.get('index') == task.get('total'):
+                                try:
+                                    await app.bot.send_message(
+                                        chat_id=task['chat_id'],
+                                        text='Загружено при поддержке #BocchiIsAlive <tg-emoji emoji-id="6041593232423391328">💠</tg-emoji>',
+                                        parse_mode='HTML'
+                                    )
+                                    reply_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
+                                    await app.bot.send_message(
+                                        chat_id=task['chat_id'],
+                                        text="🎸 Все треки обработаны. Выбери следующее действие:",
+                                        reply_markup=reply_markup
+                                    )
+                                except Exception as e:
+                                    logger.error(f"Ошибка финального сообщения: {e}")
+
                     except Exception as e:
-                        logger.debug(f"Не удалось удалить статусное сообщение: {e}")
+                        logger.error(f"Ошибка воркера: {e}", exc_info=True)
+                        if status_msg:
+                            try:
+                                await status_msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
+                            except:
+                                await app.bot.send_message(chat_id=task['chat_id'], text=f"❌ Ошибка: {str(e)[:200]}")
+                        else:
+                            await app.bot.send_message(chat_id=task['chat_id'], text=f"❌ Ошибка: {str(e)[:200]}")
+                    finally:
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+                        download_queue.task_done()
+                        active_tasks_count -= 1
+                        worker_busy = False
+                        if status_msg:
+                            try:
+                                await status_msg.delete()
+                            except:
+                                pass
+
+        except Exception as e:
+            logger.critical(f"Воркер упал с критической ошибкой: {e}", exc_info=True)
+            await asyncio.sleep(10)
 
 # --- ХЕНДЛЕРЫ ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -604,7 +651,13 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         link_accumulators[user_id] = []
     link_accumulators[user_id].extend(urls)
 
-    # Безопасная отложенная обработка
+    if user_processing.get(user_id):
+        try:
+            await message.delete()
+        except:
+            pass
+        return WAITING_FOR_LINK
+
     async def safe_delayed_process():
         try:
             await process_accumulated_links(user_id, chat_id, context, context.user_data['yandex_token'])
@@ -617,6 +670,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except:
                 pass
+        finally:
+            user_processing.pop(user_id, None)
 
     task = asyncio.create_task(safe_delayed_process())
     user_delay_tasks[user_id] = task
@@ -628,14 +683,21 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_FOR_LINK
 
 async def process_accumulated_links(user_id, chat_id, context, token):
+    user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
+
+    await asyncio.sleep(0.5)  # небольшая задержка для сбора всех ссылок
+
     if user_id not in link_accumulators or not link_accumulators[user_id]:
+        user_processing.pop(user_id, None)
         return
 
     try:
         raw_links = list(dict.fromkeys(link_accumulators.pop(user_id)))[:MAX_LINKS]
         if not raw_links:
             return
+
+        logger.info(f"Обработка ссылок для {user_id}: {raw_links}")
 
         try:
             client = await asyncio.to_thread(Client(token).init)
@@ -648,7 +710,10 @@ async def process_accumulated_links(user_id, chat_id, context, token):
         for url in raw_links:
             try:
                 if '/track/' in url:
-                    track_id = re.search(r'track/(\d+)', url).group(1)
+                    track_id_match = re.search(r'track/(\d+)', url)
+                    if not track_id_match:
+                        continue
+                    track_id = track_id_match.group(1)
                     track_info = await asyncio.to_thread(client.tracks, [track_id])
                     if track_info and track_info[0]:
                         t = track_info[0]
@@ -668,7 +733,10 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     else:
                         logger.warning(f"Трек не найден: {url}")
                 elif '/album/' in url and '/track/' not in url:
-                    album_id = re.search(r'album/(\d+)', url).group(1)
+                    album_id_match = re.search(r'album/(\d+)', url)
+                    if not album_id_match:
+                        continue
+                    album_id = album_id_match.group(1)
                     album = await asyncio.to_thread(client.albums, album_id)
                     if album and album.volumes:
                         for track in album.volumes[0]:
@@ -687,7 +755,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                                 'track_name': track_name
                             })
                     else:
-                        logger.warning(f"Альбом не найден или пуст: {url}")
+                        logger.warning(f"Альбом не найден: {url}")
                 elif '/playlist/' in url:
                     playlist_match = re.search(r'users/([^/]+)/playlists/(\d+)', url) or re.search(r'playlist/(\d+)', url)
                     if playlist_match:
@@ -716,7 +784,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                                         'track_name': track_name
                                     })
                         else:
-                            logger.warning(f"Плейлист не найден или пуст: {url}")
+                            logger.warning(f"Плейлист пуст: {url}")
                     else:
                         logger.warning(f"Не удалось распознать плейлист: {url}")
                 else:
@@ -747,9 +815,10 @@ async def process_accumulated_links(user_id, chat_id, context, token):
         logger.error(f"Критическая ошибка в process_accumulated_links: {e}", exc_info=True)
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"❌ Произошла внутренняя ошибка при обработке ссылок. Попробуйте позже.\n"
-                 f"Ошибка: {str(e)[:200]}"
+            text=f"❌ Произошла внутренняя ошибка при обработке ссылок. Попробуйте позже.\nОшибка: {str(e)[:200]}"
         )
+    finally:
+        user_processing.pop(user_id, None)
 
 async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
@@ -795,18 +864,14 @@ async def check_all_tokens(app):
 
 # --- ЗАПУСК БОТА ---
 async def post_init(app):
-    global download_semaphore, download_queue
+    global download_semaphore, download_queue, worker_task
     download_semaphore = asyncio.Semaphore(1)
     download_queue = asyncio.Queue()
-    asyncio.create_task(worker(app))
+    worker_task = asyncio.create_task(worker_loop(app))
     app.job_queue.run_repeating(lambda _: asyncio.create_task(check_all_tokens(app)), interval=900, first=10)
 
 def main():
     try:
-        if not shutil.which(DOWNLOADER_PATH):
-            logger.error(f"Загрузчик {DOWNLOADER_PATH} не найден в PATH")
-            return
-
         cleanup_old_tmp_dirs()
         if not os.path.exists(STATS_FILE):
             with open(STATS_FILE, "w") as f:
