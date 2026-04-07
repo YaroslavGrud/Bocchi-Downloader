@@ -1,4 +1,4 @@
-﻿aiofiles==25.1.0
+aiofiles==25.1.0
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.5
 aiosignal==1.4.0
@@ -30,4 +30,4 @@ urllib3==2.6.3
 yandex-music @ https://github.com/llistochek/yandex-music-api/archive/9623fbca7704f47766614efe51d66c9fd496714c.zip#sha256=44c897892a8a6463246b5dc18c340ddb0f25a312b12b1727820de8387235c857
 yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip#sha256=16ebe9e4b6ac1b4f88c6eb64ad9bf7d101f103f7ffd060a6f9f09ef4103eb323
 yarl==1.23.0
-Pillow==11.0.0
+Pillow==12.1.1
