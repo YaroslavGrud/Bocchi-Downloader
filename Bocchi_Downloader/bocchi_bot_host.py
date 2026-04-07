@@ -1,6 +1,6 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
-# Исправления: падежи качества, разделение сообщений, thumbnail, клавиатура текстом
+# Финальная версия: исправлен спам, клавиатура качества, падежи, thumbnail, обработка ошибок
 
 import asyncio
 import logging
@@ -439,7 +439,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await cmd_quality(update, context)
         return WAITING_FOR_LINK
 
-    # Обработка кнопок выбора качества
     if text in QUALITY_BUTTONS:
         new_q = QUALITY_BUTTONS[text]
         if set_user_quality(context, new_q):
@@ -454,7 +453,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Ошибка при смене качества.")
         return WAITING_FOR_LINK
 
-    # Обработка ссылок
     chat_id = update.effective_chat.id
     message = update.message
 
@@ -474,8 +472,15 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TOKEN
 
     content = (update.message.text or "") + " " + (update.message.caption or "")
-    urls = re.findall(r'(https?://(?:m\.)?music\.yandex\.[a-z]{2,3}[^\s]+)', content)
+    # Улучшенное регулярное выражение для ссылок Яндекс.Музыки
+    urls = re.findall(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}/[^\s]+)', content)
+    urls = [u for u in urls if '/music/' in u or '/track/' in u or '/album/' in u or '/playlist/' in u]
+
     if not urls:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Не удалось распознать ссылку. Убедитесь, что вы отправляете ссылку на трек, альбом или плейлист Яндекс.Музыки."
+        )
         return WAITING_FOR_LINK
 
     if user_id in user_delay_tasks:
@@ -497,7 +502,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Ошибка обработки: {e}", exc_info=True)
             try:
-                await context.bot.send_message(chat_id, "❌ Внутренняя ошибка. Попробуйте ещё раз.")
+                await context.bot.send_message(chat_id, f"❌ Внутренняя ошибка: {str(e)[:200]}")
             except:
                 pass
         finally:
@@ -511,7 +516,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
-# --- ПРОЦЕССОР ССЫЛОК ---
+# --- ПРОЦЕССОР ССЫЛОК (с полной обработкой ошибок) ---
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
@@ -538,8 +543,16 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     for url in raw_links:
         try:
             if '/track/' in url:
-                track_id = re.search(r'track/(\d+)', url).group(1)
-                track_info = await asyncio.to_thread(client.tracks, [track_id])
+                match = re.search(r'track/(\d+)', url)
+                if not match:
+                    continue
+                track_id = match.group(1)
+                try:
+                    track_info = await asyncio.to_thread(client.tracks, [track_id])
+                except Exception as e:
+                    logger.error(f"Ошибка получения трека {track_id}: {e}")
+                    await context.bot.send_message(chat_id, f"❌ Не удалось получить данные трека: {url}\nОшибка: {str(e)[:100]}")
+                    continue
                 if track_info and track_info[0]:
                     t = track_info[0]
                     artist = t.artists[0].name if t.artists else "Неизвестен"
@@ -555,9 +568,21 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                         'track_name': f"{artist} — {title}",
                         'quality': get_user_quality(context)
                     })
+                else:
+                    await context.bot.send_message(chat_id, f"❌ Трек не найден: {url}")
+                    continue
+
             elif '/album/' in url and '/track/' not in url:
-                album_id = re.search(r'album/(\d+)', url).group(1)
-                album = await asyncio.to_thread(client.albums, album_id)
+                match = re.search(r'album/(\d+)', url)
+                if not match:
+                    continue
+                album_id = match.group(1)
+                try:
+                    album = await asyncio.to_thread(client.albums, album_id)
+                except Exception as e:
+                    logger.error(f"Ошибка получения альбома {album_id}: {e}")
+                    await context.bot.send_message(chat_id, f"❌ Не удалось получить альбом: {url}\nОшибка: {str(e)[:100]}")
+                    continue
                 if album and album.volumes:
                     for track in album.volumes[0]:
                         artist = track.artists[0].name if track.artists else "Неизвестен"
@@ -574,15 +599,23 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                             'track_name': f"{artist} — {title}",
                             'quality': get_user_quality(context)
                         })
+                else:
+                    await context.bot.send_message(chat_id, f"❌ Альбом не найден или пуст: {url}")
+
             elif '/playlist/' in url:
                 playlist_match = re.search(r'users/([^/]+)/playlists/(\d+)', url) or re.search(r'playlist/(\d+)', url)
                 if playlist_match:
-                    if len(playlist_match.groups()) == 2:
-                        username, playlist_id = playlist_match.groups()
-                        playlist = await asyncio.to_thread(client.users_playlists, playlist_id, username)
-                    else:
-                        playlist_id = playlist_match.group(1)
-                        playlist = await asyncio.to_thread(client.playlist, playlist_id)
+                    try:
+                        if len(playlist_match.groups()) == 2:
+                            username, playlist_id = playlist_match.groups()
+                            playlist = await asyncio.to_thread(client.users_playlists, playlist_id, username)
+                        else:
+                            playlist_id = playlist_match.group(1)
+                            playlist = await asyncio.to_thread(client.playlist, playlist_id)
+                    except Exception as e:
+                        logger.error(f"Ошибка получения плейлиста: {e}")
+                        await context.bot.send_message(chat_id, f"❌ Не удалось получить плейлист: {url}\nОшибка: {str(e)[:100]}")
+                        continue
                     if playlist and playlist.tracks:
                         for track_data in playlist.tracks:
                             track = track_data.track
@@ -601,8 +634,11 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                                     'track_name': f"{artist} — {title}",
                                     'quality': get_user_quality(context)
                                 })
+                    else:
+                        await context.bot.send_message(chat_id, f"❌ Плейлист не найден или пуст: {url}")
         except Exception as e:
             logger.error(f"Ошибка парсинга {url}: {e}")
+            await context.bot.send_message(chat_id, f"❌ Ошибка при обработке ссылки {url}: {str(e)[:100]}")
 
     if not all_tasks:
         await context.bot.send_message(chat_id, "❌ Не удалось найти треки по ссылкам.")
@@ -623,7 +659,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     global active_tasks_count
     active_tasks_count += len(all_tasks)
 
-# --- ВОРКЕР (исправлены падежи и разделение сообщений) ---
+# --- ВОРКЕР (с исправленными падежами, thumbnail и уведомлениями) ---
 async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
@@ -700,7 +736,6 @@ async def worker_loop(app):
                             if returncode == -9:
                                 if quality_to_try > 0:
                                     new_q = quality_to_try - 1
-                                    # Используем родительный падеж для названия качества
                                     quality_gen = QUALITY_NAMES_GENITIVE[new_q]
                                     await app.bot.send_message(
                                         chat_id=task['chat_id'],
@@ -710,9 +745,6 @@ async def worker_loop(app):
                                         parse_mode='Markdown'
                                     )
                                     quality_to_try = new_q
-                                    # Сохраняем новое качество для пользователя (временно для этого трека, но не меняем глобально)
-                                    # Однако для следующих треков пользовательское качество останется исходным
-                                    # Это правильно: понижаем только для этого трека
                                     attempt += 1
                                     continue
                                 else:
@@ -738,7 +770,6 @@ async def worker_loop(app):
                         if not success:
                             continue
 
-                        # Уведомление о фактическом качестве (если изменилось)
                         if actual_quality_used != current_quality:
                             await app.bot.send_message(
                                 chat_id=task['chat_id'],
@@ -746,7 +777,6 @@ async def worker_loop(app):
                                 parse_mode='Markdown'
                             )
 
-                        # Обработка скачанных файлов
                         files = [f for f in tmp_dir.rglob('*') if f.suffix.lower() in ['.mp3', '.m4a']]
                         for f_path in files:
                             file_size_mb = f_path.stat().st_size / (1024 * 1024)
