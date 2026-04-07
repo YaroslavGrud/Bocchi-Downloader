@@ -1,6 +1,6 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
-# Финальная версия: fallback отправки, обработка всех доменов, падежи, thumbnail
+# Исправленная версия: обработка альбомов (list object has no attribute 'volumes') + защита плейлистов
 
 import asyncio
 import logging
@@ -203,7 +203,6 @@ def extract_base_url(url: str) -> str:
     match = re.match(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?)', url)
     if match:
         return match.group(1)
-    # fallback
     return "https://music.yandex.ru"
 
 def extract_cover_from_audio(file_path: Path) -> bytes:
@@ -481,7 +480,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TOKEN
 
     content = (update.message.text or "") + " " + (update.message.caption or "")
-    # Универсальное регулярное выражение для ссылок Яндекс.Музыки
     urls = re.findall(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?/(?:track|album|playlist)/[0-9]+(?:[?&][^\s]*)?)', content)
     if not urls:
         await context.bot.send_message(
@@ -523,7 +521,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
-# --- ПРОЦЕССОР ССЫЛОК (с извлечением базового URL и обработкой ошибок) ---
+# --- ПРОЦЕССОР ССЫЛОК (с исправлением для альбомов и плейлистов) ---
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
@@ -548,7 +546,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
 
     all_tasks = []
     for url in raw_links:
-        base_url = extract_base_url(url)   # динамический базовый URL
+        base_url = extract_base_url(url)
         try:
             if '/track/' in url:
                 match = re.search(r'track/(\d+)', url)
@@ -556,13 +554,14 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     continue
                 track_id = match.group(1)
                 try:
-                    track_info = await asyncio.to_thread(client.tracks, [track_id])
+                    # tracks() всегда ожидает список
+                    tracks_info = await asyncio.to_thread(client.tracks, [track_id])
                 except Exception as e:
                     logger.error(f"Ошибка получения трека {track_id}: {e}")
                     await context.bot.send_message(chat_id, f"❌ Не удалось получить данные трека: {url}\nОшибка: {str(e)[:100]}")
                     continue
-                if track_info and track_info[0]:
-                    t = track_info[0]
+                if tracks_info and len(tracks_info) > 0:
+                    t = tracks_info[0]
                     artist = t.artists[0].name if t.artists else "Неизвестен"
                     title = t.title
                     duration = t.duration_ms // 1000 if t.duration_ms else 0
@@ -586,11 +585,18 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     continue
                 album_id = match.group(1)
                 try:
-                    album = await asyncio.to_thread(client.albums, album_id)
+                    # albums() всегда возвращает список, даже для одного альбома
+                    albums_data = await asyncio.to_thread(client.albums, [album_id])
                 except Exception as e:
                     logger.error(f"Ошибка получения альбома {album_id}: {e}")
                     await context.bot.send_message(chat_id, f"❌ Не удалось получить альбом: {url}\nОшибка: {str(e)[:100]}")
                     continue
+
+                if not albums_data or len(albums_data) == 0:
+                    await context.bot.send_message(chat_id, f"❌ Альбом не найден: {url}")
+                    continue
+
+                album = albums_data[0]
                 if album and album.volumes:
                     for track in album.volumes[0]:
                         artist = track.artists[0].name if track.artists else "Неизвестен"
@@ -608,7 +614,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                             'quality': get_user_quality(context)
                         })
                 else:
-                    await context.bot.send_message(chat_id, f"❌ Альбом не найден или пуст: {url}")
+                    await context.bot.send_message(chat_id, f"❌ Альбом пуст или не содержит треков: {url}")
 
             elif '/playlist/' in url:
                 playlist_match = re.search(r'users/([^/]+)/playlists/(\d+)', url) or re.search(r'playlist/(\d+)', url)
@@ -616,15 +622,23 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     try:
                         if len(playlist_match.groups()) == 2:
                             username, playlist_id = playlist_match.groups()
-                            playlist = await asyncio.to_thread(client.users_playlists, playlist_id, username)
+                            playlist_data = await asyncio.to_thread(client.users_playlists, playlist_id, username)
                         else:
                             playlist_id = playlist_match.group(1)
-                            playlist = await asyncio.to_thread(client.playlist, playlist_id)
+                            playlist_data = await asyncio.to_thread(client.playlist, playlist_id)
+
+                        # Некоторые методы могут возвращать список, некоторые объект – унифицируем
+                        if isinstance(playlist_data, list) and len(playlist_data) > 0:
+                            playlist = playlist_data[0]
+                        else:
+                            playlist = playlist_data
+
                     except Exception as e:
                         logger.error(f"Ошибка получения плейлиста: {e}")
                         await context.bot.send_message(chat_id, f"❌ Не удалось получить плейлист: {url}\nОшибка: {str(e)[:100]}")
                         continue
-                    if playlist and playlist.tracks:
+
+                    if playlist and hasattr(playlist, 'tracks') and playlist.tracks:
                         for track_data in playlist.tracks:
                             track = track_data.track
                             if track:
