@@ -1,6 +1,8 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
 # Версия с поддержкой качества, авто-понижением памяти, обложками через thumb
+# ИСПРАВЛЕНА ПРОБЛЕМА СО СПАМОМ (повторные приветствия/запросы токена)
+# Защита от частых вызовов: 5 секунд вместо 30
 
 import asyncio
 import logging
@@ -62,6 +64,9 @@ active_tasks_count = 0
 last_auth_warning = {}
 WARNING_COOLDOWN = 60
 worker_task = None
+
+# --- ДЕДУПЛИКАЦИЯ СООБЩЕНИЙ (чтобы одно и то же сообщение не обрабатывалось дважды) ---
+last_processed_msg = {}  # {user_id: message_id}
 
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
@@ -272,11 +277,27 @@ async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите число: 0, 1 или 2.")
 
-# --- ХЕНДЛЕРЫ АВТОРИЗАЦИИ ---
+# --- ХЕНДЛЕРЫ АВТОРИЗАЦИИ (С ЗАЩИТОЙ ОТ СПАМА) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
-    last_auth_warning.pop(update.effective_user.id, None)
+
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    # Если токен уже есть и валиден – показываем главное меню без приветствия
+    if is_token_valid(context):
+        await show_main_menu(update, context)
+        return WAITING_FOR_LINK
+
+    # Защита от частого вызова /start (не чаще 1 раза в 5 секунд)
+    last_welcome = context.user_data.get('last_welcome_time', 0)
+    if time.time() - last_welcome < 5:  # <-- изменено с 30 на 5
+        logger.info(f"Игнорируем частый /start от {user_id}")
+        return WAITING_FOR_LINK
+    context.user_data['last_welcome_time'] = time.time()
+
+    last_auth_warning.pop(user_id, None)
     kb = [[KeyboardButton("🎵 Начать работу")]]
     welcome = (
         "🌸 Привет! Это Bocchi Downloader 🎸\n\n"
@@ -288,7 +309,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Жми кнопку ниже, чтобы войти в аккаунт и начать!"
     )
     await send_animated_message(
-        context.bot, update.effective_chat.id,
+        context.bot, chat_id,
         welcome,
         reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
     )
@@ -297,9 +318,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
+
     if is_token_valid(context):
         await show_main_menu(update, context)
         return WAITING_FOR_LINK
+
+    user_id = update.effective_user.id
+    # Не спамить запросом токена чаще 5 секунд
+    last_request = context.user_data.get('last_auth_request_time', 0)
+    if time.time() - last_request < 5:  # <-- изменено с 30 на 5
+        logger.info(f"Игнорируем частый запрос токена от {user_id}")
+        return WAITING_FOR_TOKEN
+    context.user_data['last_auth_request_time'] = time.time()
+
     auth_text = (
         "🔑 Авторизация\n\n"
         "1️⃣ Перейди по [ссылке](https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d)\n"
@@ -317,6 +348,14 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_TOKEN
+
+    # Дедупликация: не обрабатывать одно и то же сообщение дважды
+    user_id = update.effective_user.id
+    msg_id = update.message.message_id
+    if last_processed_msg.get(user_id) == msg_id:
+        return WAITING_FOR_TOKEN
+    last_processed_msg[user_id] = msg_id
+
     raw_text = update.message.text.strip()
     token_match = re.search(r"(y0_[a-zA-Z0-9_-]+)", raw_text)
     if token_match:
@@ -339,7 +378,7 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client = await asyncio.to_thread(Client(token).init)
         context.user_data['yandex_token'] = token
         context.user_data['token_time'] = time.time()
-        last_auth_warning.pop(update.effective_user.id, None)
+        last_auth_warning.pop(user_id, None)
         login = client.account_status().account.login
         await status_msg.edit_text(f"✅ Ура! Я узнала тебя, {login}! Теперь всё готово.")
         await show_main_menu(update, context)
@@ -375,10 +414,18 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu(update, context)
 
-# --- ОБРАБОТЧИК ССЫЛОК ---
+# --- ОБРАБОТЧИК ССЫЛОК (ТОЖЕ С ДЕДУПЛИКАЦИЕЙ) ---
 async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
+
+    # Дедупликация сообщений
+    user_id = update.effective_user.id
+    msg_id = update.message.message_id
+    if last_processed_msg.get(user_id) == msg_id:
+        return WAITING_FOR_LINK
+    last_processed_msg[user_id] = msg_id
+
     text = update.message.text
     if text == "🎵 Начать работу":
         return await check_session(update, context)
@@ -401,7 +448,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await cmd_quality(update, context)
         return WAITING_FOR_LINK
 
-    user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     message = update.message
 
