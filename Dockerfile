@@ -1,60 +1,70 @@
-# Базовый образ Python 3.11 на Alpine Linux
-FROM python:3.11-slim-alpine AS base
+FROM python:3.11-slim
 
-# Этап сборки yandex-music-downloader
-FROM base AS builder
+# Установка ffmpeg (обязательно для аудио/видео)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
-# Установка инструментов для сборки Rust-приложений
-RUN apk add --no-cache \
-    build-base \
-    cargo \
-    git \
-    libffi-dev \
-    musl-dev \
-    rust
-
-# Сборка yandex-music-downloader
-RUN git clone https://github.com/llistochek/yandex-music-downloader.git && \
-    cd yandex-music-downloader && \
-    cargo build --release && \
-    mv target/release/yandex-music-downloader /usr/local/bin/
-
-# Этап установки Python-зависимостей
-FROM base AS dependencies
-
-# Установка Python-библиотек
-COPY requirements.txt /tmp/
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
-
-# Итоговая сборка образа
-FROM base AS final
-
-# Копирование собранного бинарника и установленных пакетов
-COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin/yandex-music-downloader /usr/local/bin/
-
-# Установка runtime-зависимостей
-RUN apk add --no-cache tzdata
-
-# Настройка рабочей среды
 WORKDIR /app
+
+# Создаём правильный requirements.txt (на основе предоставленного списка)
+RUN echo 'aiofiles==25.1.0' >> requirements.txt && \
+    echo 'aiohappyeyeballs==2.6.1' >> requirements.txt && \
+    echo 'aiohttp==3.13.5' >> requirements.txt && \
+    echo 'aiosignal==1.4.0' >> requirements.txt && \
+    echo 'anyio==4.13.0' >> requirements.txt && \
+    echo 'APScheduler==3.11.2' >> requirements.txt && \
+    echo 'attrs==26.1.0' >> requirements.txt && \
+    echo 'catboxpy==0.1.1.1' >> requirements.txt && \
+    echo 'certifi==2026.2.25' >> requirements.txt && \
+    echo 'charset-normalizer==3.4.7' >> requirements.txt && \
+    echo 'frozenlist==1.8.0' >> requirements.txt && \
+    echo 'h11==0.16.0' >> requirements.txt && \
+    echo 'httpcore==1.0.9' >> requirements.txt && \
+    echo 'httpx==0.28.1' >> requirements.txt && \
+    echo 'idna==3.11' >> requirements.txt && \
+    echo 'multidict==6.7.1' >> requirements.txt && \
+    echo 'mutagen==1.47.0' >> requirements.txt && \
+    echo 'propcache==0.4.1' >> requirements.txt && \
+    echo 'psutil==7.2.2' >> requirements.txt && \
+    echo 'pycryptodome==3.23.0' >> requirements.txt && \
+    echo 'PySocks==1.7.1' >> requirements.txt && \
+    echo 'python-dotenv==1.2.2' >> requirements.txt && \
+    echo 'python-telegram-bot==22.7' >> requirements.txt && \
+    echo 'requests==2.33.1' >> requirements.txt && \
+    echo 'StrEnum==0.4.15' >> requirements.txt && \
+    echo 'typing_extensions==4.15.0' >> requirements.txt && \
+    echo 'tzdata==2026.1' >> requirements.txt && \
+    echo 'tzlocal==5.3.1' >> requirements.txt && \
+    echo 'urllib3==2.6.3' >> requirements.txt && \
+    echo 'yandex-music @ https://github.com/llistochek/yandex-music-api/archive/9623fbca7704f47766614efe51d66c9fd496714c.zip#sha256=44c897892a8a6463246b5dc18c340ddb0f25a312b12b1727820de8387235c857' >> requirements.txt && \
+    echo 'yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip#sha256=16ebe9e4b6ac1b4f88c6eb64ad9bf7d101f103f7ffd060a6f9f09ef4103eb323' >> requirements.txt && \
+    echo 'yarl==1.23.0' >> requirements.txt
+
+# Установка зависимостей
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Копируем исходный код репозитория (как есть, с main.py в корне)
 COPY . .
 
-# Проверка наличия файла перед запуском
-RUN if [ ! -f "/app/Bocchi_Downloader/bocchi_bot_host.py" ]; then echo "❗ Ошибка: файл bocchi_bot_host.py не обнаружен!" && exit 1; fi
+# Создаём нужную структуру внутри контейнера:
+#   - папку Bocchi_Downloader
+#   - перемещаем туда все исходники (handlers, keyboards, states, main.py)
+#   - создаём bocchi_bot_host.py как копию main.py
+RUN mkdir -p /app/Bocchi_Downloader && \
+    mv main.py handlers keyboards states /app/Bocchi_Downloader/ 2>/dev/null || true && \
+    cp /app/Bocchi_Downloader/main.py /app/Bocchi_Downloader/bocchi_bot_host.py
 
-# Переменные окружения
-ENV PYTHONUNBUFFERED=1
-ENV TELEGRAM_TOKEN="${TELEGRAM_TOKEN}"
-ENV DOWNLOADER_PATH="/usr/local/bin/yandex-music-downloader"
-ENV STATS_FILE="/app/stats.txt"
+# Добавляем корень /app в PYTHONPATH, чтобы импорты "from handlers import ..." работали
+ENV PYTHONPATH=/app
 
-# Настройка безопасности и прав доступа
-RUN chmod -R 755 /app && \
-    mkdir -p /app/bocchi_tmp && \
-    chown -R nobody:nogroup /app
+# Создаём рабочие папки (для загрузок, данных, временных файлов)
+RUN mkdir -p /app/data /app/downloads /app/temp && chmod 777 /app/data /app/downloads /app/temp
 
-USER nobody
+# Проверяем, что точка входа создалась
+RUN if [ ! -f "/app/Bocchi_Downloader/bocchi_bot_host.py" ]; then \
+        echo "❌ Ошибка: не удалось создать bocchi_bot_host.py" && exit 1; \
+    fi
 
-# Команда запуска приложения
+# Запуск бота
 CMD ["python", "/app/Bocchi_Downloader/bocchi_bot_host.py"]
