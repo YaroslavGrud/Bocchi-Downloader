@@ -41,7 +41,7 @@ WORKDIR /app
 COPY . .
 
 # Проверка наличия файла перед запуском
-RUN if [ ! -f "/app/bocchi_bot_host.py" ]; then echo "❗ Ошибка: файл bocchi_bot_host.py не обнаружен!" && exit 1; fi
+RUN if [ ! -f "/app/Bocchi_Downloader/bocchi_bot_host.py" ]; then echo "❗ Ошибка: файл bocchi_bot_host.py не обнаружен!" && exit 1; fi
 
 # Переменные окружения
 ENV PYTHONUNBUFFERED=1
@@ -57,4 +57,4 @@ RUN chmod -R 755 /app && \
 USER nobody
 
 # Команда запуска приложения
-CMD ["python", "/app/bocchi_bot_host.py"]
+CMD ["python", "/app/Bocchi_Downloader/bocchi_bot_host.py"]
