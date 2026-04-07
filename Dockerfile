@@ -25,6 +25,7 @@ RUN echo 'aiofiles==25.1.0' >> requirements.txt && \
     echo 'idna==3.11' >> requirements.txt && \
     echo 'multidict==6.7.1' >> requirements.txt && \
     echo 'mutagen==1.47.0' >> requirements.txt && \
+    echo 'Pillow==11.0.0' >> requirements.txt && \
     echo 'propcache==0.4.1' >> requirements.txt && \
     echo 'psutil==7.2.2' >> requirements.txt && \
     echo 'pycryptodome==3.23.0' >> requirements.txt && \
@@ -40,7 +41,7 @@ RUN echo 'aiofiles==25.1.0' >> requirements.txt && \
     echo 'yandex-music @ https://github.com/llistochek/yandex-music-api/archive/9623fbca7704f47766614efe51d66c9fd496714c.zip#sha256=44c897892a8a6463246b5dc18c340ddb0f25a312b12b1727820de8387235c857' >> requirements.txt && \
     echo 'yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip#sha256=16ebe9e4b6ac1b4f88c6eb64ad9bf7d101f103f7ffd060a6f9f09ef4103eb323' >> requirements.txt && \
     echo 'yarl==1.23.0' >> requirements.txt
-
+    
 # Установка зависимостей
 RUN pip install --no-cache-dir -r requirements.txt
 
