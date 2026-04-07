@@ -46,8 +46,8 @@ STATS_FILE = os.getenv("STATS_FILE", "../stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
-CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))
-DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "1"))  # 0=низкое, 1=среднее, 2=высокое
+CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120")) # Время отправки в облако
+DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))  # 0=низкое, 1=среднее, 2=высокое
 
 BOT_START_TIME = time.time()
 
@@ -280,10 +280,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[KeyboardButton("🎵 Начать работу")]]
     welcome = (
         "🌸 Привет! Это Bocchi Downloader 🎸\n\n"
-        "Я помогаю скачивать треки из Яндекс Музыки.\n\n"
-        f"• Можно отправлять до {MAX_LINKS} ссылок за раз.\n"
-        "• Скачиваю по очереди, чтобы всё было стабильно.\n\n"
-        "Жми кнопку ниже для входа в аккаунт."
+        "Теперь я живу на специальном хостинг сервере и "
+        "буду помогать тебе скачать любимые треки из Яндекс Музыки.\n\n"
+        "✨ Как мы будем работать:\n"
+        f"• Можешь присылать до {MAX_LINKS} ссылок за один раз.\n"
+        "• Я буду скачивать всё аккуратно и строго по очереди.\n\n"
+        "Жми кнопку ниже, чтобы войти в аккаунт и начать!"
     )
     await send_animated_message(
         context.bot, update.effective_chat.id,
@@ -302,6 +304,7 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔑 Авторизация\n\n"
         "1️⃣ Перейди по [ссылке](https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d)\n"
         "2️⃣ Нажми «Войти» или «Разрешить».\n"
+        "3️⃣ После входа страница может стать первоначальной или полностью пустой — не пугайся, так и должно быть!\n"
         "3️⃣ Скопируй весь адрес из строки браузера и отправь его мне."
     )
     await send_animated_message(
