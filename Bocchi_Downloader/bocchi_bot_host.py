@@ -1,7 +1,6 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
-# Версия с поддержкой качества, авто-понижением памяти, обложками через thumb
-# ИСПРАВЛЕНА ПРОБЛЕМА СО СПАМОМ (блокировки + дедупликация + задержка 5 сек)
+# Исправления: клавиатура качества (текстовые кнопки), параметр thumbnail, уведомления о качестве, финальные сообщения
 
 import asyncio
 import logging
@@ -13,7 +12,6 @@ import time
 import urllib.parse
 import uuid
 from pathlib import Path
-from io import BytesIO
 
 import requests
 import psutil
@@ -47,8 +45,8 @@ STATS_FILE = os.getenv("STATS_FILE", "../stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
-CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))  # Время отправки в облако
-DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))  # 0=низкое, 1=среднее, 2=высокое
+CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))
+DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))
 
 BOT_START_TIME = time.time()
 
@@ -64,21 +62,26 @@ last_auth_warning = {}
 WARNING_COOLDOWN = 60
 worker_task = None
 
-# --- ДЕДУПЛИКАЦИЯ СООБЩЕНИЙ И БЛОКИРОВКИ ПОЛЬЗОВАТЕЛЕЙ ---
-last_processed_msg = {}  # {user_id: message_id}
-user_locks = {}          # {user_id: asyncio.Lock} для сериализации команд
+# --- ДЕДУПЛИКАЦИЯ И БЛОКИРОВКИ ---
+last_processed_msg = {}
+user_locks = {}
 
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
-# --- КАЧЕСТВО ---
+# --- КАЧЕСТВО (текстовые кнопки) ---
 QUALITY_NAMES = {
     0: "Низкое",
     1: "Среднее",
     2: "Высокое"
 }
+QUALITY_BUTTONS = {
+    "Низкое": 0,
+    "Среднее": 1,
+    "Высокое": 2
+}
 
 quality_keyboard = [
-    [KeyboardButton("/quality 0"), KeyboardButton("/quality 1"), KeyboardButton("/quality 2")]
+    [KeyboardButton("Низкое"), KeyboardButton("Среднее"), KeyboardButton("Высокое")]
 ]
 quality_markup = ReplyKeyboardMarkup(quality_keyboard, resize_keyboard=True, one_time_keyboard=True)
 
@@ -191,33 +194,29 @@ def set_user_quality(context: ContextTypes.DEFAULT_TYPE, quality: int):
     return False
 
 def extract_cover_from_audio(file_path: Path) -> bytes:
-    """Извлекает обложку из аудиофайла для использования в параметре thumb Telegram."""
     try:
         audio = File(file_path)
         if audio is None:
             return None
-
         cover_data = None
-        # MP3
         if hasattr(audio, 'tags') and 'APIC:' in audio.tags:
             for tag in audio.tags.values():
                 if isinstance(tag, APIC):
                     cover_data = tag.data
                     break
-        # M4A / MP4
         elif hasattr(audio, 'tags') and 'covr' in audio.tags:
             cover_data = audio.tags['covr'][0]
             if isinstance(cover_data, MP4Cover):
                 cover_data = bytes(cover_data)
         if cover_data and len(cover_data) > 200 * 1024:
-            logger.warning(f"Обложка слишком большая ({len(cover_data)} байт), Telegram может не принять. Пропускаем.")
+            logger.warning(f"Обложка слишком большая ({len(cover_data)} байт), пропускаем.")
             return None
         return cover_data
     except Exception as e:
         logger.warning(f"Не удалось извлечь обложку: {e}")
         return None
 
-# --- АНИМИРОВАННАЯ ОТПРАВКА (исправлена ошибка пустого черновика) ---
+# --- АНИМИРОВАННАЯ ОТПРАВКА ---
 async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
     draft_id = int(time.time() * 1000) + random.randint(1, 10000)
     for attempt in range(max_retries):
@@ -227,9 +226,8 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
                 await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-            except Exception as e:
-                # Игнорируем ошибку, если черновик уже удалён или пустой
-                logger.debug(f"Не удалось удалить черновик: {e}")
+            except Exception:
+                pass
             return msg
         except Exception as e:
             logger.warning(f"Анимация {attempt+1}: {e}")
@@ -245,40 +243,19 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_markup
     )
 
-# --- КОМАНДА /quality ---
+# --- КОМАНДА /quality (теперь только показывает меню качества) ---
 async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return
-    args = context.args
-    if not args:
-        current = get_user_quality(context)
-        await update.message.reply_text(
-            f"🎵 Текущее качество: *{QUALITY_NAMES[current]}*\n\n"
-            f"Выберите новое качество с помощью кнопок ниже или командой:\n"
-            f"`/quality 0` – Низкое\n`/quality 1` – Среднее\n`/quality 2` – Высокое",
-            parse_mode='Markdown',
-            reply_markup=quality_markup
-        )
-        return
-    try:
-        new_q = int(args[0])
-        if set_user_quality(context, new_q):
-            await update.message.reply_text(
-                f"✅ Качество изменено на *{QUALITY_NAMES[new_q]}*.\n\n"
-                f"💡 *Важно:* Высокое качество требует больше ресурсов сервера. "
-                f"Если заметите зависания, попробуйте понизить качество.",
-                parse_mode='Markdown',
-                reply_markup=main_markup
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Неверное значение. Доступны: 0 (Низкое), 1 (Среднее), 2 (Высокое).",
-                reply_markup=quality_markup
-            )
-    except ValueError:
-        await update.message.reply_text("Пожалуйста, укажите число: 0, 1 или 2.")
+    current = get_user_quality(context)
+    await update.message.reply_text(
+        f"🎵 Текущее качество: *{QUALITY_NAMES[current]}*\n\n"
+        f"Выберите новое качество кнопками ниже:",
+        parse_mode='Markdown',
+        reply_markup=quality_markup
+    )
 
-# --- ХЕНДЛЕРЫ АВТОРИЗАЦИИ (С БЛОКИРОВКАМИ) ---
+# --- ХЕНДЛЕРЫ АВТОРИЗАЦИИ ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
@@ -286,19 +263,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    # Получаем или создаём блокировку для этого пользователя
     lock = user_locks.get(user_id)
     if lock is None:
         lock = asyncio.Lock()
         user_locks[user_id] = lock
 
     async with lock:
-        # Если токен уже есть и валиден – показываем главное меню без приветствия
         if is_token_valid(context):
             await show_main_menu(update, context)
             return WAITING_FOR_LINK
 
-        # Защита от частого вызова /start (не чаще 5 секунд)
         last_welcome = context.user_data.get('last_welcome_time', 0)
         if time.time() - last_welcome < 5:
             logger.info(f"Игнорируем частый /start от {user_id}")
@@ -338,7 +312,6 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_main_menu(update, context)
             return WAITING_FOR_LINK
 
-        # Не спамить запросом токена чаще 5 секунд
         last_request = context.user_data.get('last_auth_request_time', 0)
         if time.time() - last_request < 5:
             logger.info(f"Игнорируем частый запрос токена от {user_id}")
@@ -363,7 +336,6 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_TOKEN
 
-    # Дедупликация: не обрабатывать одно и то же сообщение дважды
     user_id = update.effective_user.id
     msg_id = update.message.message_id
     if last_processed_msg.get(user_id) == msg_id:
@@ -428,12 +400,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu(update, context)
 
-# --- ОБРАБОТЧИК ССЫЛОК (ТОЖЕ С ДЕДУПЛИКАЦИЕЙ) ---
+# --- ОБРАБОТЧИК ССЫЛОК И КНОПОК ---
 async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
 
-    # Дедупликация сообщений
     user_id = update.effective_user.id
     msg_id = update.message.message_id
     if last_processed_msg.get(user_id) == msg_id:
@@ -441,6 +412,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_processed_msg[user_id] = msg_id
 
     text = update.message.text
+
+    # Обработка кнопок главного меню
     if text == "🎵 Начать работу":
         return await check_session(update, context)
     if text == "🎵 Начать загрузку":
@@ -462,6 +435,22 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await cmd_quality(update, context)
         return WAITING_FOR_LINK
 
+    # Обработка кнопок выбора качества (текстовые)
+    if text in QUALITY_BUTTONS:
+        new_q = QUALITY_BUTTONS[text]
+        if set_user_quality(context, new_q):
+            await update.message.reply_text(
+                f"✅ Качество изменено на *{QUALITY_NAMES[new_q]}*.\n\n"
+                f"💡 *Важно:* Высокое качество требует больше ресурсов сервера. "
+                f"Если заметите зависания, попробуйте понизить качество.",
+                parse_mode='Markdown',
+                reply_markup=main_markup
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка при смене качества.")
+        return WAITING_FOR_LINK
+
+    # Обработка ссылок
     chat_id = update.effective_chat.id
     message = update.message
 
@@ -518,7 +507,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
-# --- ПРОЦЕССОР ССЫЛОК (НЕ ИЗМЕНЁН) ---
+# --- ПРОЦЕССОР ССЫЛОК (без изменений) ---
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
@@ -630,7 +619,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     global active_tasks_count
     active_tasks_count += len(all_tasks)
 
-# --- ВОРКЕР (НЕ ИЗМЕНЁН, КРОМЕ ИМПОРТОВ) ---
+# --- ВОРКЕР (исправлена отправка аудио и финальные сообщения) ---
 async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
@@ -645,6 +634,7 @@ async def worker_loop(app):
                 worker_busy = True
                 tmp_dir = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
                 current_quality = task.get('quality', DEFAULT_QUALITY)
+                actual_quality_used = None  # для уведомления
 
                 async with download_semaphore:
                     status_msg = None
@@ -663,7 +653,6 @@ async def worker_loop(app):
                         )
                         await app.bot.send_chat_action(chat_id=task['chat_id'], action=ChatAction.TYPING)
 
-                        # Функция запуска загрузчика с заданным качеством
                         async def run_downloader(quality):
                             cmd = [
                                 DOWNLOADER_PATH, "--token", task['token'], "--quality", str(quality),
@@ -690,12 +679,12 @@ async def worker_loop(app):
                             returncode, stdout, stderr = await run_downloader(quality_to_try)
                             if returncode == 0:
                                 success = True
+                                actual_quality_used = quality_to_try
                                 break
 
                             stderr_text = stderr.decode('utf-8', errors='replace')
                             logger.warning(f"Код {returncode}, stderr: {stderr_text[:200]}")
 
-                            # Блокировка трека
                             if any(k in stderr_text.lower() for k in ['forbidden', 'blocked', 'denied', 'регион', 'недоступен', 'restricted', '403', 'доступ запрещён']):
                                 await app.bot.send_message(
                                     chat_id=task['chat_id'],
@@ -704,7 +693,6 @@ async def worker_loop(app):
                                 )
                                 break
 
-                            # Нехватка памяти (SIGKILL)
                             if returncode == -9:
                                 if quality_to_try > 0:
                                     new_q = quality_to_try - 1
@@ -712,11 +700,10 @@ async def worker_loop(app):
                                         chat_id=task['chat_id'],
                                         text=f"⚠️ Серверу не хватило памяти для скачивания **{task['track_name']}**.\n"
                                              f"Автоматически понижаю качество до *{QUALITY_NAMES[new_q]}* и пробую снова.\n"
-                                             f"Если хотите выбрать качество вручную, используйте команду /quality.",
+                                             f"Если хотите выбрать качество вручную, используйте кнопку «Качество» в меню.",
                                         parse_mode='Markdown'
                                     )
                                     quality_to_try = new_q
-                                    # Сохраняем новое качество для пользователя
                                     if task['chat_id'] in app.user_data:
                                         app.user_data[task['chat_id']]['quality'] = new_q
                                     attempt += 1
@@ -730,7 +717,6 @@ async def worker_loop(app):
                                     )
                                     break
 
-                            # Обычная ошибка
                             if attempt == max_attempts - 1:
                                 error_msg = stderr_text[:150] if stderr_text else f"Код ошибки {returncode}"
                                 await app.bot.send_message(
@@ -744,6 +730,14 @@ async def worker_loop(app):
 
                         if not success:
                             continue
+
+                        # --- Уведомление о фактическом качестве ---
+                        if actual_quality_used != current_quality:
+                            await app.bot.send_message(
+                                chat_id=task['chat_id'],
+                                text=f"🎵 Трек **{task['track_name']}** скачан в качестве *{QUALITY_NAMES[actual_quality_used]}*.",
+                                parse_mode='Markdown'
+                            )
 
                         # Обработка скачанных файлов
                         files = [f for f in tmp_dir.rglob('*') if f.suffix.lower() in ['.mp3', '.m4a']]
@@ -797,7 +791,7 @@ async def worker_loop(app):
 
                             itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
 
-                            # Запись дополнительных тегов
+                            # Запись тегов
                             try:
                                 if f_path.suffix.lower() == '.m4a':
                                     audio = MP4(f_path)
@@ -849,7 +843,6 @@ async def worker_loop(app):
                                                            text=f"❌ Не найден файл {display_name}.")
                                 continue
 
-                            # Извлечение обложки для thumb
                             cover_bytes = extract_cover_from_audio(f_path)
 
                             # Отправка файла
@@ -912,6 +905,7 @@ async def worker_loop(app):
                             else:
                                 try:
                                     with open(f_path, 'rb') as f:
+                                        # Исправлено: thumb -> thumbnail
                                         await app.bot.send_audio(
                                             chat_id=task['chat_id'],
                                             audio=f,
@@ -919,7 +913,7 @@ async def worker_loop(app):
                                             title=title,
                                             duration=duration if duration > 0 else None,
                                             filename=safe_filename,
-                                            thumb=cover_bytes,
+                                            thumbnail=cover_bytes,  # ключ thumbnail вместо thumb
                                             read_timeout=600, write_timeout=600,
                                             connect_timeout=600, pool_timeout=600
                                         )
@@ -928,10 +922,12 @@ async def worker_loop(app):
                                     logger.error(f"Ошибка отправки аудио: {e}")
                                     await app.bot.send_message(chat_id=task['chat_id'],
                                                                text=f"❌ Не удалось отправить {display_name}: {str(e)[:200]}")
+                                    # Не отправляем финальное сообщение, если трек не отправлен
+                                    continue
 
                             add_stats(f_path.stat().st_size)
 
-                            # Финальное сообщение для пакета
+                            # Финальное сообщение только если трек успешно отправлен
                             if task.get('index') == task.get('total'):
                                 try:
                                     await app.bot.send_message(
