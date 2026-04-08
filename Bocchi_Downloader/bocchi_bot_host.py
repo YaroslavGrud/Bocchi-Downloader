@@ -1,12 +1,13 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
-# ФИНАЛЬНАЯ СТАБИЛЬНАЯ ВЕРСИЯ:
-# - Добавлено сжатие обложек для Telegram (Pillow)
-# - Исправлен парсинг альбомов (все тома)
-# - Универсальный парсинг ссылок (включая handlers/playlist.jsx)
-# - Корректный extract_base_url с сохранением домена
-# - Падение качества при нехватке памяти
-# - Отправка аудио с fallback на документ
+# ОБЪЕДИНЁННАЯ ВЕРСИЯ (финальная):
+# - Универсальный парсинг ссылок + обработка альбомов/плейлистов
+# - Сжатие обложек (Pillow) и fallback отправка (аудио -> документ)
+# - Загрузка файлов >49 МБ на Litterbox/Catbox
+# - Анимированная отправка сообщений (draft-методы)
+# - Автоматическое понижение качества при нехватке места на диске (<20 МБ)
+# - (Защита от падения при достижении 256 МБ)
+# - Проверка диска перед каждым треком
 
 import asyncio
 import logging
@@ -23,6 +24,7 @@ import io
 
 import requests
 import psutil
+from catboxpy import AsyncCatboxClient, LitterboxClient
 from dotenv import load_dotenv
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
@@ -55,6 +57,7 @@ DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
 CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))
 DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))
+MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))  # минимально свободного места на диске
 
 BOT_START_TIME = time.time()
 
@@ -162,7 +165,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
         img = Image.open(io.BytesIO(cover_bytes))
         if img.mode in ('RGBA', 'P'):
             img = img.convert('RGB')
-        # Пробуем уменьшить качество JPEG
         quality = 85
         while quality >= 30:
             output = io.BytesIO()
@@ -170,7 +172,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
             if output.tell() <= max_size_bytes:
                 return output.getvalue()
             quality -= 10
-        # Уменьшаем размеры
         for scale in [0.75, 0.5, 0.3]:
             new_size = (int(img.width * scale), int(img.height * scale))
             resized = img.resize(new_size, Image.Resampling.LANCZOS)
@@ -178,7 +179,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
             resized.save(output, format='JPEG', quality=75, optimize=True)
             if output.tell() <= max_size_bytes:
                 return output.getvalue()
-        # Финальная попытка с очень низким качеством
         output = io.BytesIO()
         img.save(output, format='JPEG', quality=20, optimize=True)
         if output.tell() <= max_size_bytes:
@@ -188,6 +188,44 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
     except Exception as e:
         logger.error(f"Ошибка сжатия обложки: {e}")
         return None
+
+def extract_cover_from_audio(file_path: Path) -> bytes | None:
+    """Извлекает обложку из аудиофайла (резервный метод)."""
+    try:
+        audio = File(file_path)
+        if audio is None:
+            return None
+        cover_data = None
+        if hasattr(audio, 'tags') and 'APIC:' in audio.tags:
+            for tag in audio.tags.values():
+                if isinstance(tag, APIC):
+                    cover_data = tag.data
+                    break
+        elif hasattr(audio, 'tags') and 'covr' in audio.tags:
+            cover_data = audio.tags['covr'][0]
+            if isinstance(cover_data, MP4Cover):
+                cover_data = bytes(cover_data)
+        if cover_data and len(cover_data) > 200 * 1024:
+            logger.warning(f"Обложка слишком большая ({len(cover_data)} байт), пропускаем.")
+            return None
+        return cover_data
+    except Exception as e:
+        logger.warning(f"Не удалось извлечь обложку: {e}")
+        return None
+
+def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
+    """Проверяет, есть ли на диске минимум min_free_mb МБ свободного места.
+    Возвращает (достаточно_места, свободно_мб)."""
+    try:
+        stat = shutil.disk_usage(Path.cwd())
+        free_mb = stat.free / (1024 * 1024)
+        if free_mb < min_free_mb:
+            logger.warning(f"Мало места на диске: {free_mb:.1f} МБ свободно (нужно {min_free_mb} МБ)")
+            return False, free_mb
+        return True, free_mb
+    except Exception as e:
+        logger.error(f"Ошибка проверки диска: {e}")
+        return True, 9999  # на всякий случай не блокируем
 
 def cleanup_old_tmp_dirs():
     count = 0
@@ -223,16 +261,6 @@ def get_formatted_stats():
     except:
         return "0 Б"
 
-def check_memory():
-    try:
-        mem = psutil.virtual_memory()
-        if mem.available < 150 * 1024 * 1024:
-            logger.warning(f"Мало памяти: {mem.available / 1024 / 1024:.0f} МБ")
-            return False
-        return True
-    except:
-        return True
-
 def get_user_quality(context: ContextTypes.DEFAULT_TYPE) -> int:
     return context.user_data.get('quality', DEFAULT_QUALITY)
 
@@ -262,28 +290,23 @@ def parse_yandex_url(url: str):
     path = parsed.path
     query = parse_qs(parsed.query)
 
-    # Трек
     track_match = re.search(r'/track/(\d+)', path)
     if track_match:
         return ('track', track_match.group(1), None)
 
-    # Альбом (без track в пути)
     if '/album/' in path and '/track/' not in path:
         album_match = re.search(r'/album/(\d+)', path)
         if album_match:
             return ('album', album_match.group(1), None)
 
-    # Плейлист: /users/username/playlists/123
     playlist_match = re.search(r'/users/([^/]+)/playlists/(\d+)', path)
     if playlist_match:
         return ('playlist', playlist_match.group(2), playlist_match.group(1))
 
-    # Плейлист: /playlist/123
     playlist_match2 = re.search(r'/playlist/(\d+)', path)
     if playlist_match2:
         return ('playlist', playlist_match2.group(1), None)
 
-    # Плейлист: handlers/playlist.jsx?owner=xxx&kinds=yyy
     if 'handlers/playlist.jsx' in path:
         owner = query.get('owner', [None])[0]
         kinds = query.get('kinds', [None])[0]
@@ -292,11 +315,24 @@ def parse_yandex_url(url: str):
 
     return (None, None, None)
 
-# --- АНИМИРОВАННАЯ ОТПРАВКА (без черновиков, т.к. их нет в PTB) ---
-async def send_animated_message(bot, chat_id, text, **kwargs):
-    """Имитирует анимацию через send_chat_action."""
-    await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    await asyncio.sleep(0.3)
+# --- АНИМИРОВАННАЯ ОТПРАВКА (с draft-методами) ---
+async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
+    draft_id = int(time.time() * 1000) + random.randint(1, 10000)
+    for attempt in range(max_retries):
+        try:
+            await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
+            await asyncio.sleep(delay)
+            msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            try:
+                await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
+            except Exception:
+                pass
+            return msg
+        except Exception as e:
+            logger.warning(f"Анимация {attempt+1}: {e}")
+            if attempt == max_retries - 1:
+                return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            await asyncio.sleep(0.5 * (attempt + 1))
     return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -571,7 +607,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
-# --- ПРОЦЕССОР ССЫЛОК (с исправлениями) ---
+# --- ПРОЦЕССОР ССЫЛОК (универсальный) ---
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
@@ -707,7 +743,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     global active_tasks_count
     active_tasks_count += len(all_tasks)
 
-# --- ВОРКЕР (с fallback отправки и сжатием обложек) ---
+# --- ВОРКЕР (с проверкой диска и понижением качества) ---
 async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
@@ -727,13 +763,6 @@ async def worker_loop(app):
                 async with download_semaphore:
                     status_msg = None
                     try:
-                        if not check_memory():
-                            await app.bot.send_message(
-                                chat_id=task['chat_id'],
-                                text="⚠️ На сервере заканчивается память. Попробуйте позже."
-                            )
-                            continue
-
                         tmp_dir.mkdir(parents=True, exist_ok=True)
                         status_msg = await app.bot.send_message(
                             chat_id=task['chat_id'],
@@ -764,6 +793,35 @@ async def worker_loop(app):
                         quality_to_try = current_quality
 
                         while attempt < max_attempts and not success:
+                            # --- ПРОВЕРКА СВОБОДНОГО МЕСТА НА ДИСКЕ ПЕРЕД ПОПЫТКОЙ СКАЧИВАНИЯ ---
+                            enough_space, free_mb = check_disk_space(MIN_FREE_DISK_MB)
+                            if not enough_space:
+                                if quality_to_try > 0:
+                                    # Понижаем качество
+                                    new_q = quality_to_try - 1
+                                    quality_gen = QUALITY_NAMES_GENITIVE[new_q]
+                                    await app.bot.send_message(
+                                        chat_id=task['chat_id'],
+                                        text=f"⚠️ На диске осталось всего {free_mb:.1f} МБ свободного места.\n"
+                                             f"Для загрузки **{task['track_name']}** в качестве *{QUALITY_NAMES[quality_to_try]}* места не хватит.\n"
+                                             f"Автоматически понижаю качество до *{quality_gen}* и пробую снова.\n\n"
+                                             f"Если хотите выбрать качество вручную, используйте кнопку «Качество» в меню.",
+                                        parse_mode='Markdown'
+                                    )
+                                    quality_to_try = new_q
+                                    attempt += 1
+                                    continue
+                                else:
+                                    await app.bot.send_message(
+                                        chat_id=task['chat_id'],
+                                        text=f"❌ На диске осталось всего {free_mb:.1f} МБ свободного места.\n"
+                                             f"Даже на низком качестве недостаточно места для скачивания **{task['track_name']}**.\n"
+                                             f"Пожалуйста, освободите место на сервере или попробуйте позже.",
+                                        parse_mode='Markdown'
+                                    )
+                                    break
+
+                            # --- ЗАПУСК ЗАГРУЗЧИКА ---
                             returncode, stdout, stderr = await run_downloader(quality_to_try)
                             if returncode == 0:
                                 success = True
@@ -781,6 +839,7 @@ async def worker_loop(app):
                                 )
                                 break
 
+                            # Ошибка -9 (память) – оставляем для совместимости, но основная проверка теперь по диску
                             if returncode == -9:
                                 if quality_to_try > 0:
                                     new_q = quality_to_try - 1
@@ -825,9 +884,11 @@ async def worker_loop(app):
                                 parse_mode='Markdown'
                             )
 
-                        # --- Обработка скачанных файлов ---
+                        # Обработка скачанных файлов
                         files = [f for f in tmp_dir.rglob('*') if f.suffix.lower() in ['.mp3', '.m4a']]
                         for f_path in files:
+                            file_size_mb = f_path.stat().st_size / (1024 * 1024)
+
                             artist = task.get('artist')
                             title = task.get('title')
                             duration = task.get('duration', 0)
@@ -860,9 +921,7 @@ async def worker_loop(app):
                                     title = "Неизвестный трек"
 
                             display_name = f"{artist} — {title}"
-                            safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
 
-                            # LRC-текст
                             lyrics = None
                             base_name = f_path.stem
                             lrc_files = list(tmp_dir.glob(f"{base_name}.lrc"))
@@ -875,7 +934,7 @@ async def worker_loop(app):
 
                             itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
 
-                            # Запись дополнительных тегов (включая обложку в файл)
+                            # Запись тегов
                             try:
                                 if f_path.suffix.lower() == '.m4a':
                                     audio = MP4(f_path)
@@ -906,7 +965,7 @@ async def worker_loop(app):
                             except Exception as tag_e:
                                 logger.error(f"Ошибка записи тегов: {tag_e}")
 
-                            # Переименование
+                            safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
                             new_f_path = f_path.with_name(safe_filename)
                             try:
                                 f_path.rename(new_f_path)
@@ -926,62 +985,102 @@ async def worker_loop(app):
                                                            text=f"❌ Не найден файл {display_name}.")
                                 continue
 
-                            # Сжатие обложки для отправки в Telegram
-                            cover_bytes_raw = itunes_data.get('cover_bytes')
-                            thumbnail = compress_cover(cover_bytes_raw) if cover_bytes_raw else None
+                            cover_bytes = extract_cover_from_audio(f_path)
+                            if cover_bytes:
+                                cover_bytes = compress_cover(cover_bytes)
 
-                            # --- ОТПРАВКА С FALLBACK ---
-                            sent = False
-                            last_error = None
+                            if file_size_mb > 49.0:
+                                uploaded = False
+                                error_message = ""
+                                if status_msg:
+                                    try:
+                                        await status_msg.edit_text(
+                                            f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на облако..."
+                                        )
+                                    except:
+                                        pass
 
-                            # Попытка 1: отправить как аудио
-                            try:
-                                with open(f_path, 'rb') as f:
-                                    await app.bot.send_audio(
-                                        chat_id=task['chat_id'],
-                                        audio=f,
-                                        performer=artist,
-                                        title=title,
-                                        duration=duration if duration > 0 else None,
-                                        filename=safe_filename,
-                                        thumbnail=thumbnail,
-                                        read_timeout=600, write_timeout=600,
-                                        connect_timeout=600, pool_timeout=600
-                                    )
-                                sent = True
-                                logger.info(f"Отправлен трек как аудио: {display_name}")
-                            except Exception as e:
-                                last_error = e
-                                logger.error(f"Ошибка send_audio: {e}, пробую отправить как документ")
+                                try:
+                                    litterbox = LitterboxClient()
+                                    upload_coro = asyncio.to_thread(litterbox.upload_file, str(f_path), expire_time="24h")
+                                    if CLOUD_TIMEOUT > 0:
+                                        url = await asyncio.wait_for(upload_coro, timeout=CLOUD_TIMEOUT)
+                                    else:
+                                        url = await upload_coro
+                                    if url and url.startswith(("https://", "http://")):
+                                        await app.bot.send_message(
+                                            chat_id=task['chat_id'],
+                                            text=f"🎁 {display_name} слишком велик для Telegram.\nВременная ссылка (24ч):\n{url}",
+                                            disable_web_page_preview=True
+                                        )
+                                        uploaded = True
+                                    else:
+                                        error_message = "Litterbox вернул не ссылку"
+                                except asyncio.TimeoutError:
+                                    error_message = "Litterbox: таймаут загрузки"
+                                except Exception as e:
+                                    error_message = f"Litterbox: {e}"
 
-                            # Попытка 2: отправить как документ
-                            if not sent:
+                                if not uploaded:
+                                    try:
+                                        catbox = AsyncCatboxClient()
+                                        if CLOUD_TIMEOUT > 0:
+                                            url = await asyncio.wait_for(catbox.upload(str(f_path)), timeout=CLOUD_TIMEOUT)
+                                        else:
+                                            url = await catbox.upload(str(f_path))
+                                        if url and url.startswith(("https://", "http://")):
+                                            await app.bot.send_message(
+                                                chat_id=task['chat_id'],
+                                                text=f"🎁 {display_name} слишком велик для Telegram.\nПостоянная ссылка:\n{url}",
+                                                disable_web_page_preview=True
+                                            )
+                                            uploaded = True
+                                        else:
+                                            error_message = "Catbox вернул не ссылку"
+                                    except asyncio.TimeoutError:
+                                        error_message = "Catbox: таймаут загрузки"
+                                    except Exception as e:
+                                        error_message = f"Catbox: {e}"
+
+                                if not uploaded:
+                                    await app.bot.send_message(chat_id=task['chat_id'],
+                                                               text=f"❌ Не удалось загрузить {display_name}. Ошибка: {error_message}")
+                            else:
                                 try:
                                     with open(f_path, 'rb') as f:
-                                        await app.bot.send_document(
+                                        await app.bot.send_audio(
                                             chat_id=task['chat_id'],
-                                            document=f,
+                                            audio=f,
+                                            performer=artist,
+                                            title=title,
+                                            duration=duration if duration > 0 else None,
                                             filename=safe_filename,
-                                            caption=f"🎵 {display_name}\nНе удалось отправить как аудио, файл во вложении.",
+                                            thumbnail=cover_bytes,
                                             read_timeout=600, write_timeout=600,
                                             connect_timeout=600, pool_timeout=600
                                         )
-                                    sent = True
-                                    logger.info(f"Отправлен трек как документ: {display_name}")
-                                except Exception as e2:
-                                    last_error = e2
-                                    logger.error(f"Ошибка send_document: {e2}")
-
-                            if not sent:
-                                await app.bot.send_message(
-                                    chat_id=task['chat_id'],
-                                    text=f"❌ Не удалось отправить {display_name} даже как документ.\nОшибка: {str(last_error)[:200]}"
-                                )
-                                continue
+                                    logger.info(f"Отправлен трек: {display_name}")
+                                except Exception as e:
+                                    logger.error(f"Ошибка отправки аудио: {e}")
+                                    # Пробуем отправить как документ
+                                    try:
+                                        with open(f_path, 'rb') as f:
+                                            await app.bot.send_document(
+                                                chat_id=task['chat_id'],
+                                                document=f,
+                                                filename=safe_filename,
+                                                caption=f"🎵 {display_name}\nНе удалось отправить как аудио, файл во вложении.",
+                                                read_timeout=600, write_timeout=600,
+                                                connect_timeout=600, pool_timeout=600
+                                            )
+                                        logger.info(f"Отправлен трек как документ: {display_name}")
+                                    except Exception as e2:
+                                        await app.bot.send_message(chat_id=task['chat_id'],
+                                                                   text=f"❌ Не удалось отправить {display_name}: {str(e2)[:200]}")
+                                        continue
 
                             add_stats(f_path.stat().st_size)
 
-                            # Финальное сообщение для пакета
                             if task.get('index') == task.get('total'):
                                 try:
                                     await app.bot.send_message(
