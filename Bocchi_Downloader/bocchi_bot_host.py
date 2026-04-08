@@ -1,19 +1,11 @@
 # (c) 2026 Hanako
-# Проект "Bocchi Downloader" (Server Edition)
-
-# Изменения:
-# - Универсальный парсинг ссылок + обработка альбомов/плейлистов
-# - Сжатие обложек (Pillow) с многоступенчатыми попытками
-# - Fallback отправка (аудио -> документ)
-# - Загрузка файлов >49 МБ на Litterbox/Catbox
-# - Анимированная отправка сообщений (draft-методы)
-# - Автоматическое понижение качества при нехватке места на диске (<20 МБ)
-# - Проверка диска перед каждым треком
-# - Исправлена логика обложек: приоритет из аудио, затем iTunes, сжатие до 200 КБ
+# Bocchi Downloader - ФИНАЛЬНАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ ПЕРЕЗАПУСКА ЗАВИСШИХ ЗАДАЧ
 
 import asyncio
+import aiohttp
 import logging
 import os
+import json
 import random
 import re
 import shutil
@@ -23,6 +15,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import io
+import gc
 
 import requests
 import psutil
@@ -34,22 +27,19 @@ from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen import File
 from telegram import (
-    Update, ReplyKeyboardMarkup, KeyboardButton,
+    Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 )
 from telegram.constants import ChatAction
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, ConversationHandler, filters
 )
 from yandex_music import Client
 from PIL import Image
 
-# Устанавливаем уровень логов для httpx, чтобы избежать ошибки форматирования
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
 load_dotenv()
 
-# --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(message)s')
 logger = logging.getLogger("BocchiStation")
 
@@ -63,6 +53,12 @@ TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
 CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))
 DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))
 MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))
+TRACK_DELAY_SECONDS = float(os.getenv("TRACK_DELAY_SECONDS", "5.0"))
+STUCK_TIMEOUT = int(os.getenv("STUCK_TIMEOUT", "120"))  # 2 минуты
+QUEUE_STATE_FILE = "download_queue_state.json"
+USER_TOKENS_FILE = "user_tokens.json"
+ACTIVE_MSGS_FILE = "active_status_msgs.json"
+PENDING_TASKS_FILE = "pending_tasks.json"
 
 BOT_START_TIME = time.time()
 
@@ -77,14 +73,15 @@ active_tasks_count = 0
 last_auth_warning = {}
 WARNING_COOLDOWN = 60
 worker_task = None
-
-# --- ДЕДУПЛИКАЦИЯ И БЛОКИРОВКИ ---
 last_processed_msg = {}
 user_locks = {}
+user_tokens = {}
+active_status_msgs = {}
+pending_tasks = {}
+current_task_info = {}  # task_id -> {"start_time": float, "chat_id": int, "task": dict, "process": asyncio.subprocess.Process}
 
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
-# --- КАЧЕСТВО ---
 QUALITY_NAMES = {0: "Низкое", 1: "Среднее", 2: "Высокое"}
 QUALITY_NAMES_GENITIVE = {0: "низкого", 1: "среднего", 2: "высокого"}
 QUALITY_BUTTONS = {"Низкое": 0, "Среднее": 1, "Высокое": 2}
@@ -98,19 +95,118 @@ main_menu_keyboard = [
 ]
 main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
 
-# ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
+# ===================== РАБОТА С ТОКЕНАМИ =====================
+def save_user_tokens():
+    try:
+        with open(USER_TOKENS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(user_tokens, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения токенов: {e}")
 
+def load_user_tokens():
+    global user_tokens
+    if not os.path.exists(USER_TOKENS_FILE):
+        return
+    try:
+        with open(USER_TOKENS_FILE, 'r', encoding='utf-8') as f:
+            loaded = json.load(f)
+        now = time.time()
+        for uid, data in loaded.items():
+            if now - data.get('timestamp', 0) <= TOKEN_LIFETIME:
+                user_tokens[uid] = data
+        logger.info(f"Загружено {len(user_tokens)} действующих токенов")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки токенов: {e}")
+
+def is_token_valid_by_id(user_id: int) -> bool:
+    data = user_tokens.get(str(user_id))
+    if not data:
+        return False
+    return (time.time() - data['timestamp']) <= TOKEN_LIFETIME
+
+def get_user_token(user_id: int) -> str | None:
+    data = user_tokens.get(str(user_id))
+    if data and is_token_valid_by_id(user_id):
+        return data['token']
+    return None
+
+def set_user_token(user_id: int, token: str):
+    user_tokens[str(user_id)] = {"token": token, "timestamp": time.time()}
+    save_user_tokens()
+
+def delete_user_token(user_id: int):
+    user_tokens.pop(str(user_id), None)
+    save_user_tokens()
+
+# ===================== АКТИВНЫЕ СООБЩЕНИЯ =====================
+def save_active_msgs():
+    try:
+        with open(ACTIVE_MSGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(active_status_msgs, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения активных сообщений: {e}")
+
+def load_active_msgs():
+    global active_status_msgs
+    if not os.path.exists(ACTIVE_MSGS_FILE):
+        return
+    try:
+        with open(ACTIVE_MSGS_FILE, 'r', encoding='utf-8') as f:
+            active_status_msgs = json.load(f)
+        logger.info(f"Загружено {len(active_status_msgs)} активных сообщений")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки активных сообщений: {e}")
+
+async def cleanup_orphan_messages(app):
+    for task_id, info in list(active_status_msgs.items()):
+        try:
+            await app.bot.delete_message(chat_id=info['chat_id'], message_id=info['message_id'])
+            logger.info(f"Удалено висящее сообщение {info['message_id']} для задачи {task_id}")
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение {info['message_id']}: {e}")
+        active_status_msgs.pop(task_id, None)
+    save_active_msgs()
+
+# ===================== ОТЛОЖЕННЫЕ ЗАДАЧИ =====================
+def save_pending_tasks():
+    try:
+        with open(PENDING_TASKS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(pending_tasks, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения отложенных задач: {e}")
+
+def load_pending_tasks():
+    global pending_tasks
+    if not os.path.exists(PENDING_TASKS_FILE):
+        return
+    try:
+        with open(PENDING_TASKS_FILE, 'r', encoding='utf-8') as f:
+            pending_tasks = json.load(f)
+        logger.info(f"Загружено {len(pending_tasks)} чатов с отложенными задачами")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки отложенных задач: {e}")
+
+def add_pending_task(chat_id: int, task):
+    chat_id_str = str(chat_id)
+    if chat_id_str not in pending_tasks:
+        pending_tasks[chat_id_str] = []
+    pending_tasks[chat_id_str].append(task)
+    save_pending_tasks()
+
+def get_pending_tasks(chat_id: int) -> list:
+    return pending_tasks.get(str(chat_id), [])
+
+def clear_pending_tasks(chat_id: int):
+    pending_tasks.pop(str(chat_id), None)
+    save_pending_tasks()
+
+# ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 def is_message_too_old(update: Update) -> bool:
     return update.message.date.timestamp() < BOT_START_TIME if update.message else False
 
 def is_token_valid(context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if 'yandex_token' not in context.user_data:
-        return False
-    token_time = context.user_data.get('token_time')
-    if token_time is None:
-        context.user_data['token_time'] = time.time()
-        return True
-    return (time.time() - token_time) <= TOKEN_LIFETIME
+    user_id = context._user_id
+    return is_token_valid_by_id(user_id)
 
 def get_plural_tracks(n):
     if n % 10 == 1 and n % 100 != 11:
@@ -146,23 +242,18 @@ def fetch_metadata_from_itunes(artist, title):
     return {}
 
 def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> bytes | None:
-    """Сжимает обложку до указанного максимального размера с многоступенчатыми попытками."""
     if not cover_bytes or len(cover_bytes) <= max_size_bytes:
         return cover_bytes
     try:
         img = Image.open(io.BytesIO(cover_bytes))
         if img.mode in ('RGBA', 'P'):
             img = img.convert('RGB')
-        
-        # Этап 1: снижение качества JPEG
         for quality in [85, 75, 65, 55, 45, 35, 25]:
             output = io.BytesIO()
             img.save(output, format='JPEG', quality=quality, optimize=True)
             if output.tell() <= max_size_bytes:
                 logger.info(f"Обложка сжата качеством {quality}: {len(cover_bytes)} -> {output.tell()} байт")
                 return output.getvalue()
-        
-        # Этап 2: уменьшение размеров
         for scale in [0.75, 0.5, 0.3, 0.2, 0.15]:
             new_size = (int(img.width * scale), int(img.height * scale))
             if new_size[0] < 10 or new_size[1] < 10:
@@ -173,8 +264,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
             if output.tell() <= max_size_bytes:
                 logger.info(f"Обложка сжата уменьшением до {new_size}: {len(cover_bytes)} -> {output.tell()} байт")
                 return output.getvalue()
-        
-        # Этап 3: экстремальное сжатие
         for scale in [0.1, 0.08]:
             new_size = (int(img.width * scale), int(img.height * scale))
             if new_size[0] < 8 or new_size[1] < 8:
@@ -183,9 +272,8 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
             output = io.BytesIO()
             resized.save(output, format='JPEG', quality=30, optimize=True)
             if output.tell() <= max_size_bytes:
-                logger.info(f"Обложка сжата экстремально (размер {new_size}, качество 30): {len(cover_bytes)} -> {output.tell()} байт")
+                logger.info(f"Обложка сжата экстремально: {len(cover_bytes)} -> {output.tell()} байт")
                 return output.getvalue()
-        
         logger.error(f"Не удалось сжать обложку: исходный размер {len(cover_bytes)} байт")
         return None
     except Exception as e:
@@ -193,7 +281,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
         return None
 
 def extract_cover_from_audio(file_path: Path) -> bytes | None:
-    """Извлекает обложку из аудиофайла (без проверки размера, сжатие позже)."""
     try:
         audio = File(file_path)
         if audio is None:
@@ -213,8 +300,19 @@ def extract_cover_from_audio(file_path: Path) -> bytes | None:
         logger.warning(f"Не удалось извлечь обложку: {e}")
         return None
 
+def get_audio_duration(file_path: Path) -> int:
+    try:
+        if file_path.suffix.lower() == '.m4a':
+            audio = MP4(file_path)
+            return int(audio.info.length)
+        else:
+            audio = MP3(file_path)
+            return int(audio.info.length)
+    except Exception as e:
+        logger.warning(f"Не удалось получить длительность из файла: {e}")
+        return 0
+
 def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
-    """Проверяет, есть ли на диске минимум min_free_mb МБ свободного места."""
     try:
         stat = shutil.disk_usage(Path.cwd())
         free_mb = stat.free / (1024 * 1024)
@@ -246,20 +344,6 @@ def add_stats(bytes_added):
     except:
         pass
 
-def get_formatted_stats():
-    try:
-        if not os.path.exists(STATS_FILE):
-            return "0 Б"
-        with open(STATS_FILE, "r") as f:
-            bytes_val = float(f.read())
-        for unit in ['Б', 'КБ', 'МБ', 'ГБ']:
-            if bytes_val < 1024.0:
-                return f"{bytes_val:.2f} {unit}"
-            bytes_val /= 1024.0
-        return f"{bytes_val:.2f} ТБ"
-    except:
-        return "0 Б"
-
 def get_user_quality(context: ContextTypes.DEFAULT_TYPE) -> int:
     return context.user_data.get('quality', DEFAULT_QUALITY)
 
@@ -286,24 +370,35 @@ def parse_yandex_url(url: str):
     track_match = re.search(r'/track/(\d+)', path)
     if track_match:
         return ('track', track_match.group(1), None)
-    if '/album/' in path and '/track/' not in path:
+
+    if '/album/' in path:
         album_match = re.search(r'/album/(\d+)', path)
         if album_match:
             return ('album', album_match.group(1), None)
+        album_match2 = re.search(r'album/(\d+)', path)
+        if album_match2:
+            return ('album', album_match2.group(1), None)
+
     playlist_match = re.search(r'/users/([^/]+)/playlists/(\d+)', path)
     if playlist_match:
         return ('playlist', playlist_match.group(2), playlist_match.group(1))
+
     playlist_match2 = re.search(r'/playlist/(\d+)', path)
     if playlist_match2:
         return ('playlist', playlist_match2.group(1), None)
+
+    playlist_uuid_match = re.search(r'/playlists/([a-z0-9\-\.]+)', path)
+    if playlist_uuid_match:
+        return ('playlist', playlist_uuid_match.group(1), None)
+
     if 'handlers/playlist.jsx' in path:
         owner = query.get('owner', [None])[0]
         kinds = query.get('kinds', [None])[0]
         if owner and kinds:
             return ('playlist', kinds, owner)
+
     return (None, None, None)
 
-# --- АНИМИРОВАННАЯ ОТПРАВКА ---
 async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
     draft_id = int(time.time() * 1000) + random.randint(1, 10000)
     for attempt in range(max_retries):
@@ -330,7 +425,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_markup
     )
 
-# --- КОМАНДА /quality ---
 async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return
@@ -342,30 +436,25 @@ async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=quality_markup
     )
 
-# --- ХЕНДЛЕРЫ АВТОРИЗАЦИИ ---
+# ===================== ХЕНДЛЕРЫ АВТОРИЗАЦИИ =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
-
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-
     lock = user_locks.get(user_id)
     if lock is None:
         lock = asyncio.Lock()
         user_locks[user_id] = lock
-
     async with lock:
         if is_token_valid(context):
             await show_main_menu(update, context)
             return WAITING_FOR_LINK
-
         last_welcome = context.user_data.get('last_welcome_time', 0)
         if time.time() - last_welcome < 5:
             logger.info(f"Игнорируем частый /start от {user_id}")
             return WAITING_FOR_LINK
         context.user_data['last_welcome_time'] = time.time()
-
         last_auth_warning.pop(user_id, None)
         kb = [[KeyboardButton("🎵 Начать работу")]]
         welcome = (
@@ -389,24 +478,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
-
     user_id = update.effective_user.id
     lock = user_locks.get(user_id)
     if lock is None:
         lock = asyncio.Lock()
         user_locks[user_id] = lock
-
     async with lock:
         if is_token_valid(context):
             await show_main_menu(update, context)
             return WAITING_FOR_LINK
-
         last_request = context.user_data.get('last_auth_request_time', 0)
         if time.time() - last_request < 5:
             logger.info(f"Игнорируем частый запрос токена от {user_id}")
             return WAITING_FOR_TOKEN
         context.user_data['last_auth_request_time'] = time.time()
-
         auth_text = (
             "🔑 Авторизация\n\n"
             "1️⃣ Перейди по [ссылке](https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d)\n"
@@ -424,13 +509,11 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_TOKEN
-
     user_id = update.effective_user.id
     msg_id = update.message.message_id
     if last_processed_msg.get(user_id) == msg_id:
         return WAITING_FOR_TOKEN
     last_processed_msg[user_id] = msg_id
-
     raw_text = update.message.text.strip()
     token_match = re.search(r"(y0_[a-zA-Z0-9_-]+)", raw_text)
     if token_match:
@@ -451,6 +534,7 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔍 Проверяю токен...")
     try:
         client = await asyncio.to_thread(Client(token).init)
+        set_user_token(user_id, token)
         context.user_data['yandex_token'] = token
         context.user_data['token_time'] = time.time()
         last_auth_warning.pop(user_id, None)
@@ -466,6 +550,8 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return
+    user_id = update.effective_user.id
+    delete_user_token(user_id)
     context.user_data.pop('yandex_token', None)
     context.user_data.pop('token_time', None)
     await send_animated_message(
@@ -489,17 +575,55 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu(update, context)
 
-# --- ОБРАБОТЧИК ССЫЛОК И КНОПОК ---
+# ===================== КНОПКА "БОТ НЕ ОТВЕЧАЕТ?" =====================
+async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.message.chat_id
+    # Ищем зависшую задачу для этого чата
+    stuck_task_id = None
+    stuck_info = None
+    for task_id, info in current_task_info.items():
+        if info['chat_id'] == chat_id:
+            stuck_task_id = task_id
+            stuck_info = info
+            break
+    if not stuck_info:
+        await query.edit_message_text("❌ Нет зависших задач для этого чата.")
+        return
+    # Отменяем процесс
+    proc = stuck_info.get('process')
+    if proc and not proc.returncode:
+        try:
+            proc.kill()
+            await proc.wait()
+            logger.info(f"Убит зависший процесс для задачи {stuck_task_id}")
+        except Exception as e:
+            logger.error(f"Ошибка при убийстве процесса: {e}")
+    # Удаляем временное сообщение
+    msg_id = active_status_msgs.pop(stuck_task_id, {}).get('message_id')
+    if msg_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except:
+            pass
+    # Удаляем запись из current_task_info
+    current_task_info.pop(stuck_task_id, None)
+    # Перезапускаем задачу (ставим обратно в очередь)
+    task = stuck_info['task']
+    await download_queue.put(task)
+    await query.edit_message_text(f"🔄 Задача «{task['track_name']}» перезапущена. Продолжаю загрузку...")
+    logger.info(f"Задача {stuck_task_id} перезапущена пользователем")
+
+# ===================== ОБРАБОТЧИК СООБЩЕНИЙ =====================
 async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
-
     user_id = update.effective_user.id
     msg_id = update.message.message_id
     if last_processed_msg.get(user_id) == msg_id:
         return WAITING_FOR_LINK
     last_processed_msg[user_id] = msg_id
-
     text = update.message.text
 
     if text == "🎵 Начать работу":
@@ -522,7 +646,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "⚙️ Качество":
         await cmd_quality(update, context)
         return WAITING_FOR_LINK
-
     if text in QUALITY_BUTTONS:
         new_q = QUALITY_BUTTONS[text]
         if set_user_quality(context, new_q):
@@ -539,6 +662,14 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = update.effective_chat.id
     message = update.message
+
+    # Проверяем, есть ли отложенные задачи для этого чата
+    pending = get_pending_tasks(chat_id)
+    if pending:
+        await context.bot.send_message(chat_id, f"🔄 Обнаружены отложенные задачи ({len(pending)} треков). Продолжаю загрузку...")
+        for task in pending:
+            await download_queue.put(task)
+        clear_pending_tasks(chat_id)
 
     if not is_token_valid(context):
         try:
@@ -578,8 +709,12 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_LINK
 
     async def safe_process():
+        token = get_user_token(user_id)
+        if not token:
+            await context.bot.send_message(chat_id, "❌ Токен не найден. Авторизуйтесь заново.")
+            return
         try:
-            await process_accumulated_links(user_id, chat_id, context, context.user_data['yandex_token'])
+            await process_accumulated_links(user_id, chat_id, context, token)
         except Exception as e:
             logger.error(f"Ошибка обработки: {e}", exc_info=True)
             try:
@@ -588,6 +723,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         finally:
             user_processing.pop(user_id, None)
+            link_accumulators.pop(user_id, None)
 
     task = asyncio.create_task(safe_process())
     user_delay_tasks[user_id] = task
@@ -597,7 +733,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
-# --- ПРОЦЕССОР ССЫЛОК ---
+# ===================== ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ССЫЛОК =====================
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
@@ -613,14 +749,23 @@ async def process_accumulated_links(user_id, chat_id, context, token):
 
     logger.info(f"Ссылки от {user_id}: {raw_links}")
 
+    async def yandex_api_request(endpoint):
+        headers = {"Authorization": f"OAuth {token}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(endpoint, headers=headers) as resp:
+                return resp.status, await resp.json() if resp.status == 200 else None
+
     try:
-        client = await asyncio.to_thread(Client(token).init)
+        client = await asyncio.to_thread(Client, token)
+        client = await asyncio.to_thread(client.init)
     except Exception as e:
-        logger.error(f"Ошибка клиента: {e}")
+        logger.error(f"Ошибка создания клиента: {e}")
         await context.bot.send_message(chat_id, "❌ Ошибка авторизации. Попробуйте снова.")
         return
 
-    all_tasks = []
+    current_queue_size = download_queue.qsize()
+    added_count = 0
+
     for url in raw_links:
         base_url = extract_base_url(url)
         content_type, content_id, username = parse_yandex_url(url)
@@ -636,106 +781,227 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     t = tracks_info[0]
                     artist = t.artists[0].name if t.artists else "Неизвестен"
                     title = t.title
-                    duration = t.duration_ms // 1000 if t.duration_ms else 0
-                    all_tasks.append({
+                    track_name = f"{artist} — {title}"
+                    queue_pos = current_queue_size + added_count + 1
+                    await context.bot.send_message(
+                        chat_id,
+                        f"🎵 Загружаю трек: *{track_name}*. Ваша очередь: {queue_pos}",
+                        parse_mode='Markdown'
+                    )
+                    batch_id = f"{user_id}_{int(time.time())}_{content_id}"
+                    task_item = {
                         'chat_id': chat_id,
                         'url': url,
                         'token': token,
                         'artist': artist,
                         'title': title,
-                        'duration': duration,
-                        'track_name': f"{artist} — {title}",
-                        'quality': get_user_quality(context)
-                    })
+                        'duration': 0,
+                        'track_name': track_name,
+                        'quality': get_user_quality(context),
+                        'batch_id': batch_id,
+                        'batch_index': 1,
+                        'batch_total': 1,
+                        'user_id': user_id
+                    }
+                    await download_queue.put(task_item)
+                    added_count += 1
                 else:
                     await context.bot.send_message(chat_id, f"❌ Трек не найден: {url}")
 
             elif content_type == 'album':
-                albums_data = await asyncio.to_thread(client.albums, [content_id])
-                if not albums_data or len(albums_data) == 0:
+                api_url = f"https://api.music.yandex.net/albums/{content_id}/with-tracks"
+                status, data = await yandex_api_request(api_url)
+                if status != 200 or not data or 'result' not in data:
                     await context.bot.send_message(chat_id, f"❌ Альбом не найден: {url}")
                     continue
-                album = albums_data[0]
-                tracks_found = False
-                if album and hasattr(album, 'volumes') and album.volumes:
-                    for volume in album.volumes:
-                        if not volume:
+                album_data = data['result']
+                album_title = album_data.get('title', 'Неизвестный альбом')
+                volumes = album_data.get('volumes', [])
+                track_list = []
+                for volume in volumes:
+                    for track in volume:
+                        track_id = track.get('id')
+                        if not track_id:
                             continue
-                        for track in volume:
-                            tracks_found = True
-                            artist = track.artists[0].name if track.artists else "Неизвестен"
-                            title = track.title
-                            duration = track.duration_ms // 1000 if track.duration_ms else 0
-                            track_url = f"{base_url}/track/{track.id}"
-                            all_tasks.append({
-                                'chat_id': chat_id,
-                                'url': track_url,
-                                'token': token,
-                                'artist': artist,
-                                'title': title,
-                                'duration': duration,
-                                'track_name': f"{artist} — {title}",
-                                'quality': get_user_quality(context)
-                            })
-                if not tracks_found:
-                    await context.bot.send_message(chat_id, f"❌ Альбом пуст или не содержит треков: {url}")
+                        artist = track.get('artists', [{}])[0].get('name', 'Неизвестен')
+                        title = track.get('title', 'Неизвестный трек')
+                        track_list.append({
+                            'url': f"{base_url}/track/{track_id}",
+                            'artist': artist,
+                            'title': title,
+                            'name': f"{artist} — {title}"
+                        })
+                if not track_list:
+                    await context.bot.send_message(chat_id, f"❌ Альбом пуст: {url}")
+                    continue
+                total_tracks = len(track_list)
+                queue_pos = current_queue_size + added_count + 1
+                await context.bot.send_message(
+                    chat_id,
+                    f"📀 Загружаю альбом: *{album_title}* ({get_plural_tracks(total_tracks)}). Ваша очередь: {queue_pos}",
+                    parse_mode='Markdown'
+                )
+                batch_id = f"{user_id}_{int(time.time())}_{content_id}"
+                for idx, track_info in enumerate(track_list):
+                    task_item = {
+                        'chat_id': chat_id,
+                        'url': track_info['url'],
+                        'token': token,
+                        'artist': track_info['artist'],
+                        'title': track_info['title'],
+                        'duration': 0,
+                        'track_name': track_info['name'],
+                        'quality': get_user_quality(context),
+                        'batch_id': batch_id,
+                        'batch_index': idx + 1,
+                        'batch_total': total_tracks,
+                        'user_id': user_id
+                    }
+                    await download_queue.put(task_item)
+                    added_count += 1
 
             elif content_type == 'playlist':
+                # ВНИМАНИЕ: API Яндекс.Музыки не позволяет получить треки из служебных плейлистов с префиксами ps., lk., pl.
+                # Это ограничение самого API, а не бота. Такие плейлисты (например, «Моя волна») не поддерживаются.
+                content_id_str = str(content_id)
+                if content_id_str.startswith(('ps.', 'lk.', 'pl.')):
+                    await context.bot.send_message(
+                        chat_id,
+                        f"⚠️ Плейлист «{content_id_str}» является персональной подборкой Яндекс.Музыки (например, «Моя волна»). "
+                        f"API не позволяет получить его треки. Пожалуйста, создайте обычный плейлист и добавьте в него нужные треки вручную."
+                    )
+                    continue
+
+                endpoints = [
+                    f"https://api.music.yandex.net/playlists/{content_id_str}",
+                    f"https://api.music.yandex.net/playlists/{content_id_str}?with-tracks=true",
+                ]
                 if username:
-                    playlist_data = await asyncio.to_thread(client.users_playlists, content_id, username)
-                else:
-                    playlist_data = await asyncio.to_thread(client.playlist, content_id)
-                if isinstance(playlist_data, list) and len(playlist_data) > 0:
-                    playlist = playlist_data[0]
-                else:
-                    playlist = playlist_data
-                if playlist and hasattr(playlist, 'tracks') and playlist.tracks:
-                    for track_data in playlist.tracks:
-                        track = track_data.track
-                        if track:
-                            artist = track.artists[0].name if track.artists else "Неизвестен"
-                            title = track.title
-                            duration = track.duration_ms // 1000 if track.duration_ms else 0
-                            track_url = f"{base_url}/track/{track.id}"
-                            all_tasks.append({
-                                'chat_id': chat_id,
-                                'url': track_url,
-                                'token': token,
-                                'artist': artist,
-                                'title': title,
-                                'duration': duration,
-                                'track_name': f"{artist} — {title}",
-                                'quality': get_user_quality(context)
-                            })
-                else:
-                    await context.bot.send_message(chat_id, f"❌ Плейлист не найден или пуст: {url}")
+                    endpoints.append(f"https://api.music.yandex.net/users/{username}/playlists/{content_id}?with-tracks=true")
+
+                success = False
+                playlist_data = None
+                for api_url in endpoints:
+                    status, data = await yandex_api_request(api_url)
+                    logger.info(f"Плейлист API статус {status} для {api_url}")
+                    if status == 200 and data and 'result' in data:
+                        playlist_data = data['result']
+                        if 'playlist' in playlist_data:
+                            playlist_data = playlist_data['playlist']
+                        success = True
+                        break
+                    elif status == 403:
+                        await context.bot.send_message(chat_id, f"🔒 Плейлист приватный: {url}")
+                        break
+                if not success:
+                    await context.bot.send_message(chat_id, f"❌ Плейлист не найден или недоступен: {url}")
+                    continue
+
+                playlist_title = playlist_data.get('title', 'Неизвестный плейлист')
+                tracks_data = playlist_data.get('tracks', [])
+                track_list = []
+                for item in tracks_data:
+                    track = item.get('track')
+                    if not track:
+                        continue
+                    track_id = track.get('id')
+                    artist = track.get('artists', [{}])[0].get('name', 'Неизвестен')
+                    title = track.get('title', 'Неизвестный трек')
+                    track_list.append({
+                        'url': f"{base_url}/track/{track_id}",
+                        'artist': artist,
+                        'title': title,
+                        'name': f"{artist} — {title}"
+                    })
+                if not track_list:
+                    await context.bot.send_message(chat_id, f"❌ Плейлист пуст: {url}")
+                    continue
+                total_tracks = len(track_list)
+                queue_pos = current_queue_size + added_count + 1
+                await context.bot.send_message(
+                    chat_id,
+                    f"🎧 Загружаю плейлист: *{playlist_title}* ({get_plural_tracks(total_tracks)}). Ваша очередь: {queue_pos}",
+                    parse_mode='Markdown'
+                )
+                batch_id = f"{user_id}_{int(time.time())}_{content_id}"
+                for idx, track_info in enumerate(track_list):
+                    task_item = {
+                        'chat_id': chat_id,
+                        'url': track_info['url'],
+                        'token': token,
+                        'artist': track_info['artist'],
+                        'title': track_info['title'],
+                        'duration': 0,
+                        'track_name': track_info['name'],
+                        'quality': get_user_quality(context),
+                        'batch_id': batch_id,
+                        'batch_index': idx + 1,
+                        'batch_total': total_tracks,
+                        'user_id': user_id
+                    }
+                    await download_queue.put(task_item)
+                    added_count += 1
 
         except Exception as e:
             logger.error(f"Ошибка парсинга {url}: {e}")
             await context.bot.send_message(chat_id, f"❌ Ошибка при обработке ссылки {url}: {str(e)[:100]}")
 
-    if not all_tasks:
+    if added_count == 0:
         await context.bot.send_message(chat_id, "❌ Не удалось найти треки по ссылкам.")
         return
 
-    total = len(all_tasks)
-    queue_pos = download_queue.qsize() + 1
-    msg = f"📥 Приняла запрос на {get_plural_tracks(total)}. Ваша очередь: {queue_pos}"
-    if worker_busy:
-        msg += "\n🎸 Сейчас немного занята, но скоро начну."
-    await context.bot.send_message(chat_id, msg)
-
-    for idx, task in enumerate(all_tasks):
-        task['index'] = idx + 1
-        task['total'] = total
-        await download_queue.put(task)
-
     global active_tasks_count
-    active_tasks_count += len(all_tasks)
+    active_tasks_count += added_count
+    save_queue_state()
 
-# --- ВОРКЕР (с исправленной логикой обложек) ---
+# ===================== СОХРАНЕНИЕ И ВОССТАНОВЛЕНИЕ ОЧЕРЕДИ =====================
+def save_queue_state():
+    try:
+        tasks = []
+        while not download_queue.empty():
+            try:
+                task = download_queue.get_nowait()
+                tasks.append(task)
+            except asyncio.QueueEmpty:
+                break
+        for task in tasks:
+            download_queue.put_nowait(task)
+        with open(QUEUE_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(tasks, f, ensure_ascii=False, indent=2)
+        logger.info(f"Сохранено {len(tasks)} задач в очередь")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения очереди: {e}")
+
+def load_queue_state():
+    if not os.path.exists(QUEUE_STATE_FILE):
+        return
+    try:
+        with open(QUEUE_STATE_FILE, 'r', encoding='utf-8') as f:
+            tasks = json.load(f)
+        valid_tasks = []
+        for task in tasks:
+            user_id = task.get('user_id')
+            if user_id:
+                token = get_user_token(user_id)
+                if token:
+                    task['token'] = token
+                    valid_tasks.append(task)
+                else:
+                    logger.warning(f"Задача для пользователя {user_id} пропущена: нет валидного токена")
+            else:
+                logger.warning(f"Задача без user_id пропущена: {task.get('track_name')}")
+        for task in valid_tasks:
+            download_queue.put_nowait(task)
+        logger.info(f"Восстановлено {len(valid_tasks)} задач из очереди")
+        os.remove(QUEUE_STATE_FILE)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки очереди: {e}")
+
+# ===================== ВОРКЕР =====================
 async def worker_loop(app):
     global worker_busy, active_tasks_count
+    chat_temp_msg = {}
+
     while True:
         try:
             if not shutil.which(DOWNLOADER_PATH):
@@ -749,18 +1015,49 @@ async def worker_loop(app):
                 tmp_dir = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
                 current_quality = task.get('quality', DEFAULT_QUALITY)
                 actual_quality_used = None
+                task_id = f"{task.get('batch_id')}_{task.get('batch_index')}"
+                chat_id = task['chat_id']
 
                 async with download_semaphore:
                     status_msg = None
+                    stuck_notification_sent = False
+                    downloader_process = None
                     try:
+                        # Удаляем предыдущее висящее сообщение
+                        old_info = active_status_msgs.pop(task_id, None)
+                        if old_info:
+                            try:
+                                await app.bot.delete_message(chat_id=old_info['chat_id'], message_id=old_info['message_id'])
+                            except Exception:
+                                pass
+                        prev = chat_temp_msg.pop(chat_id, None)
+                        if prev:
+                            try:
+                                await app.bot.delete_message(chat_id=chat_id, message_id=prev)
+                            except:
+                                pass
+
                         tmp_dir.mkdir(parents=True, exist_ok=True)
                         status_msg = await app.bot.send_message(
-                            chat_id=task['chat_id'],
+                            chat_id=chat_id,
                             text=f"🌀 Обработка...\n{task['track_name']}\nКачество: {QUALITY_NAMES[current_quality]}"
                         )
-                        await app.bot.send_chat_action(chat_id=task['chat_id'], action=ChatAction.TYPING)
+                        active_status_msgs[task_id] = {"chat_id": chat_id, "message_id": status_msg.message_id}
+                        save_active_msgs()
+
+                        await app.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+                        # Запоминаем время начала и задачу для кнопки
+                        start_time = time.time()
+                        current_task_info[task_id] = {
+                            "start_time": start_time,
+                            "chat_id": chat_id,
+                            "task": task,
+                            "process": None
+                        }
 
                         async def run_downloader(quality):
+                            nonlocal downloader_process
                             cmd = [
                                 DOWNLOADER_PATH, "--token", task['token'], "--quality", str(quality),
                                 "--embed-cover", "--cover-resolution", "original",
@@ -770,6 +1067,7 @@ async def worker_loop(app):
                             proc = await asyncio.create_subprocess_exec(
                                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                             )
+                            downloader_process = proc
                             try:
                                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=DOWNLOAD_TIMEOUT)
                                 return proc.returncode, stdout, stderr
@@ -783,25 +1081,45 @@ async def worker_loop(app):
                         quality_to_try = current_quality
 
                         while attempt < max_attempts and not success:
+                            # Проверяем, не зависла ли задача (таймер 2 минуты)
+                            if time.time() - start_time > STUCK_TIMEOUT and not stuck_notification_sent:
+                                stuck_notification_sent = True
+                                keyboard = InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("⚠️ Бот не отвечает? Нажмите", callback_data="restart_stuck_task")]
+                                ])
+                                await app.bot.send_message(
+                                    chat_id=chat_id,
+                                    text="⏳ Обработка трека затягивается. Возможно, проблема с сервером. Нажмите кнопку, чтобы перезапустить задачу.",
+                                    reply_markup=keyboard
+                                )
+                                logger.warning(f"Задача {task_id} зависла, отправлено уведомление")
+
                             enough_space, free_mb = check_disk_space(MIN_FREE_DISK_MB)
                             if not enough_space:
                                 if quality_to_try > 0:
                                     new_q = quality_to_try - 1
                                     quality_gen = QUALITY_NAMES_GENITIVE[new_q]
-                                    await app.bot.send_message(
-                                        chat_id=task['chat_id'],
+                                    prev = chat_temp_msg.pop(chat_id, None)
+                                    if prev:
+                                        try:
+                                            await app.bot.delete_message(chat_id=chat_id, message_id=prev)
+                                        except:
+                                            pass
+                                    msg = await app.bot.send_message(
+                                        chat_id=chat_id,
                                         text=f"⚠️ На диске осталось всего {free_mb:.1f} МБ свободного места.\n"
                                              f"Для загрузки **{task['track_name']}** в качестве *{QUALITY_NAMES[quality_to_try]}* места не хватит.\n"
                                              f"Автоматически понижаю качество до *{quality_gen}* и пробую снова.\n\n"
                                              f"Если хотите выбрать качество вручную, используйте кнопку «Качество» в меню.",
                                         parse_mode='Markdown'
                                     )
+                                    chat_temp_msg[chat_id] = msg.message_id
                                     quality_to_try = new_q
                                     attempt += 1
                                     continue
                                 else:
                                     await app.bot.send_message(
-                                        chat_id=task['chat_id'],
+                                        chat_id=chat_id,
                                         text=f"❌ На диске осталось всего {free_mb:.1f} МБ свободного места.\n"
                                              f"Даже на низком качестве недостаточно места для скачивания **{task['track_name']}**.\n"
                                              f"Пожалуйста, освободите место на сервере или попробуйте позже.",
@@ -818,41 +1136,48 @@ async def worker_loop(app):
                             stderr_text = stderr.decode('utf-8', errors='replace')
                             logger.warning(f"Код {returncode}, stderr: {stderr_text[:200]}")
 
-                            if any(k in stderr_text.lower() for k in ['forbidden', 'blocked', 'denied', 'регион', 'недоступен', 'restricted', '403', 'доступ запрещён']):
-                                await app.bot.send_message(
-                                    chat_id=task['chat_id'],
-                                    text=f"❌ Яндекс заблокировал трек **{task['track_name']}**.\nВозможно, он удалён или недоступен в вашем регионе.",
-                                    parse_mode='Markdown'
-                                )
-                                break
-
                             if returncode == -9:
                                 if quality_to_try > 0:
                                     new_q = quality_to_try - 1
                                     quality_gen = QUALITY_NAMES_GENITIVE[new_q]
-                                    await app.bot.send_message(
-                                        chat_id=task['chat_id'],
+                                    prev = chat_temp_msg.pop(chat_id, None)
+                                    if prev:
+                                        try:
+                                            await app.bot.delete_message(chat_id=chat_id, message_id=prev)
+                                        except:
+                                            pass
+                                    msg = await app.bot.send_message(
+                                        chat_id=chat_id,
                                         text=f"⚠️ Серверу не хватило памяти для скачивания **{task['track_name']}**.\n"
                                              f"Автоматически понижаю качество до *{quality_gen}* и пробую снова.\n\n"
                                              f"Если хотите выбрать качество вручную, используйте кнопку «Качество» в меню.",
                                         parse_mode='Markdown'
                                     )
+                                    chat_temp_msg[chat_id] = msg.message_id
                                     quality_to_try = new_q
                                     attempt += 1
                                     continue
                                 else:
                                     await app.bot.send_message(
-                                        chat_id=task['chat_id'],
+                                        chat_id=chat_id,
                                         text=f"❌ Даже на низком качестве не хватает памяти для **{task['track_name']}**.\n"
                                              f"Попробуйте позже или скачайте трек в приложении.",
                                         parse_mode='Markdown'
                                     )
                                     break
 
+                            if any(k in stderr_text.lower() for k in ['forbidden', 'blocked', 'denied', 'регион', 'недоступен', 'restricted', '403', 'доступ запрещён']):
+                                await app.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=f"❌ Яндекс заблокировал трек **{task['track_name']}**.\nВозможно, он удалён или недоступен в вашем регионе.",
+                                    parse_mode='Markdown'
+                                )
+                                break
+
                             if attempt == max_attempts - 1:
                                 error_msg = stderr_text[:150] if stderr_text else f"Код ошибки {returncode}"
                                 await app.bot.send_message(
-                                    chat_id=task['chat_id'],
+                                    chat_id=chat_id,
                                     text=f"❌ Не удалось скачать **{task['track_name']}**.\nОшибка: {error_msg}",
                                     parse_mode='Markdown'
                                 )
@@ -861,23 +1186,32 @@ async def worker_loop(app):
                             attempt += 1
 
                         if not success:
+                            # Если не удалось скачать, удаляем задачу из current и переходим к следующей
+                            current_task_info.pop(task_id, None)
+                            save_queue_state()
                             continue
 
                         if actual_quality_used != current_quality:
-                            await app.bot.send_message(
-                                chat_id=task['chat_id'],
+                            prev = chat_temp_msg.pop(chat_id, None)
+                            if prev:
+                                try:
+                                    await app.bot.delete_message(chat_id=chat_id, message_id=prev)
+                                except:
+                                    pass
+                            msg = await app.bot.send_message(
+                                chat_id=chat_id,
                                 text=f"🎵 Трек **{task['track_name']}** скачан в качестве *{QUALITY_NAMES[actual_quality_used]}*.",
                                 parse_mode='Markdown'
                             )
+                            chat_temp_msg[chat_id] = msg.message_id
 
-                        # --- Обработка скачанных файлов ---
                         files = [f for f in tmp_dir.rglob('*') if f.suffix.lower() in ['.mp3', '.m4a']]
                         for f_path in files:
                             file_size_mb = f_path.stat().st_size / (1024 * 1024)
 
                             artist = task.get('artist')
                             title = task.get('title')
-                            duration = task.get('duration', 0)
+                            duration = get_audio_duration(f_path)
 
                             if not artist or not title:
                                 try:
@@ -885,42 +1219,36 @@ async def worker_loop(app):
                                         audio_read = MP4(f_path)
                                         artist = audio_read.get('\xa9ART', ['Неизвестен'])[0]
                                         title = audio_read.get('\xa9nam', [f_path.stem])[0]
-                                        if not duration:
-                                            duration = int(audio_read.info.length)
                                     else:
                                         audio_t, audio_i = EasyID3(f_path), MP3(f_path)
                                         artist = audio_t.get('artist', ['Неизвестен'])[0]
                                         title = audio_t.get('title', [f_path.stem])[0]
-                                        if not duration:
-                                            duration = int(audio_i.info.length)
                                 except Exception as e:
                                     logger.warning(f"Ошибка чтения данных: {e}")
-                                    artist = "Неизвестен"
-                                    title = f_path.stem
+                                    artist = task.get('artist', 'Неизвестен')
+                                    title = task.get('title', f_path.stem)
 
-                            if not task.get('artist'):
-                                artist = artist.replace("#artist", "Неизвестен").strip()
-                                title = title.replace("#artist", "").replace("#title", "").strip(" -")
-                                if not artist:
-                                    artist = "Неизвестен"
-                                if not title:
-                                    title = "Неизвестный трек"
+                            artist = artist.replace("#artist", "Неизвестен").strip()
+                            title = title.replace("#artist", "").replace("#title", "").strip(" -")
+                            if not artist:
+                                artist = "Неизвестен"
+                            if not title:
+                                title = "Неизвестный трек"
 
                             display_name = f"{artist} — {title}"
+                            safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
 
                             lyrics = None
-                            base_name = f_path.stem
-                            lrc_files = list(tmp_dir.glob(f"{base_name}.lrc"))
+                            lrc_files = list(tmp_dir.glob(f"{f_path.stem}.lrc"))
                             if lrc_files:
                                 try:
-                                    with open(lrc_files[0], 'r', encoding='utf-8') as f:
-                                        lyrics = f.read().strip()
-                                except Exception as e:
-                                    logger.warning(f"Ошибка чтения LRC: {e}")
+                                    with open(lrc_files[0], 'r', encoding='utf-8') as lf:
+                                        lyrics = lf.read().strip()
+                                except:
+                                    pass
 
                             itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
 
-                            # Запись тегов
                             try:
                                 if f_path.suffix.lower() == '.m4a':
                                     audio = MP4(f_path)
@@ -951,155 +1279,117 @@ async def worker_loop(app):
                             except Exception as tag_e:
                                 logger.error(f"Ошибка записи тегов: {tag_e}")
 
-                            safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
                             new_f_path = f_path.with_name(safe_filename)
                             try:
                                 f_path.rename(new_f_path)
                                 f_path = new_f_path
-                            except Exception:
+                            except:
                                 try:
                                     shutil.move(str(f_path), str(new_f_path))
                                     f_path = new_f_path
-                                except Exception as move_e:
-                                    logger.error(f"Не удалось переименовать: {move_e}")
-                                    await app.bot.send_message(chat_id=task['chat_id'],
-                                                               text=f"❌ Не удалось переименовать {display_name}.")
-                                    continue
+                                except:
+                                    pass
 
-                            if not f_path.exists():
-                                await app.bot.send_message(chat_id=task['chat_id'],
-                                                           text=f"❌ Не найден файл {display_name}.")
-                                continue
-
-                            # --- ИЗВЛЕЧЕНИЕ И СЖАТИЕ ОБЛОЖКИ (приоритет из аудио) ---
                             cover_bytes = extract_cover_from_audio(f_path)
                             if not cover_bytes and itunes_data.get('cover_bytes'):
                                 cover_bytes = itunes_data['cover_bytes']
-                                logger.info("Обложка не найдена в аудиофайле, использую iTunes.")
-                            
                             thumbnail = None
                             if cover_bytes:
-                                original_size = len(cover_bytes)
-                                if original_size > 200 * 1024:
-                                    logger.info(f"Обложка слишком большая ({original_size} байт), выполняется попытка сжатия.")
+                                if len(cover_bytes) > 200 * 1024:
+                                    logger.info(f"Обложка слишком большая ({len(cover_bytes)} байт), сжимаю.")
                                     compressed = compress_cover(cover_bytes, max_size_bytes=200*1024)
                                     if compressed:
                                         thumbnail = compressed
-                                        logger.info(f"Обложка успешно сжата: {original_size} -> {len(compressed)} байт.")
-                                    else:
-                                        logger.warning(f"Не удалось сжать обложку до допустимого размера. Отправляем без обложки.")
+                                        logger.info(f"Обложка сжата: {len(cover_bytes)} -> {len(compressed)} байт.")
                                 else:
                                     thumbnail = cover_bytes
-                                    logger.info(f"Обложка подходит по размеру ({original_size} байт).")
-                            else:
-                                logger.info("Обложка не найдена.")
 
-                            # --- ОТПРАВКА ---
                             if file_size_mb > 49.0:
                                 uploaded = False
-                                error_message = ""
                                 if status_msg:
                                     try:
-                                        await status_msg.edit_text(
-                                            f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на облако..."
-                                        )
+                                        await status_msg.edit_text(f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на облако...")
                                     except:
                                         pass
-
                                 try:
                                     litterbox = LitterboxClient()
-                                    upload_coro = asyncio.to_thread(litterbox.upload_file, str(f_path), expire_time="24h")
-                                    if CLOUD_TIMEOUT > 0:
-                                        url = await asyncio.wait_for(upload_coro, timeout=CLOUD_TIMEOUT)
-                                    else:
-                                        url = await upload_coro
-                                    if url and url.startswith(("https://", "http://")):
-                                        await app.bot.send_message(
-                                            chat_id=task['chat_id'],
-                                            text=f"🎁 {display_name} слишком велик для Telegram.\nВременная ссылка (24ч):\n{url}",
-                                            disable_web_page_preview=True
-                                        )
+                                    url = await asyncio.wait_for(asyncio.to_thread(litterbox.upload_file, str(f_path), expire_time="24h"), timeout=CLOUD_TIMEOUT)
+                                    if url:
+                                        await app.bot.send_message(chat_id=chat_id, text=f"🎁 {display_name} слишком велик для Telegram.\nВременная ссылка (24ч):\n{url}", disable_web_page_preview=True)
                                         uploaded = True
-                                    else:
-                                        error_message = "Litterbox вернул не ссылку"
-                                except asyncio.TimeoutError:
-                                    error_message = "Litterbox: таймаут загрузки"
-                                except Exception as e:
-                                    error_message = f"Litterbox: {e}"
-
+                                except:
+                                    pass
                                 if not uploaded:
                                     try:
                                         catbox = AsyncCatboxClient()
-                                        if CLOUD_TIMEOUT > 0:
-                                            url = await asyncio.wait_for(catbox.upload(str(f_path)), timeout=CLOUD_TIMEOUT)
-                                        else:
-                                            url = await catbox.upload(str(f_path))
-                                        if url and url.startswith(("https://", "http://")):
-                                            await app.bot.send_message(
-                                                chat_id=task['chat_id'],
-                                                text=f"🎁 {display_name} слишком велик для Telegram.\nПостоянная ссылка:\n{url}",
-                                                disable_web_page_preview=True
-                                            )
+                                        url = await asyncio.wait_for(catbox.upload(str(f_path)), timeout=CLOUD_TIMEOUT)
+                                        if url:
+                                            await app.bot.send_message(chat_id=chat_id, text=f"🎁 {display_name} слишком велик для Telegram.\nПостоянная ссылка:\n{url}", disable_web_page_preview=True)
                                             uploaded = True
-                                        else:
-                                            error_message = "Catbox вернул не ссылку"
-                                    except asyncio.TimeoutError:
-                                        error_message = "Catbox: таймаут загрузки"
-                                    except Exception as e:
-                                        error_message = f"Catbox: {e}"
-
+                                    except:
+                                        pass
                                 if not uploaded:
-                                    await app.bot.send_message(chat_id=task['chat_id'],
-                                                               text=f"❌ Не удалось загрузить {display_name}. Ошибка: {error_message}")
+                                    await app.bot.send_message(chat_id=chat_id, text=f"❌ Не удалось загрузить {display_name}.")
                             else:
                                 try:
-                                    with open(f_path, 'rb') as f:
+                                    with open(f_path, 'rb') as af:
                                         await app.bot.send_audio(
-                                            chat_id=task['chat_id'],
-                                            audio=f,
+                                            chat_id=chat_id,
+                                            audio=af,
                                             performer=artist,
                                             title=title,
-                                            duration=duration if duration > 0 else None,
+                                            duration=duration,
                                             filename=safe_filename,
                                             thumbnail=thumbnail,
-                                            read_timeout=600, write_timeout=600,
-                                            connect_timeout=600, pool_timeout=600
+                                            read_timeout=600, write_timeout=600
                                         )
-                                    logger.info(f"Отправлен трек: {display_name}")
+                                    logger.info(f"Отправлен трек: {display_name}, длительность={duration}")
                                 except Exception as e:
                                     logger.error(f"Ошибка отправки аудио: {e}")
                                     try:
-                                        with open(f_path, 'rb') as f:
+                                        with open(f_path, 'rb') as af:
                                             await app.bot.send_document(
-                                                chat_id=task['chat_id'],
-                                                document=f,
+                                                chat_id=chat_id,
+                                                document=af,
                                                 filename=safe_filename,
-                                                caption=f"🎵 {display_name}\nНе удалось отправить как аудио, файл во вложении.",
-                                                read_timeout=600, write_timeout=600,
-                                                connect_timeout=600, pool_timeout=600
+                                                caption=f"🎵 {display_name}\nНе удалось отправить как аудио, файл во вложении."
                                             )
-                                        logger.info(f"Отправлен трек как документ: {display_name}")
                                     except Exception as e2:
-                                        await app.bot.send_message(chat_id=task['chat_id'],
-                                                                   text=f"❌ Не удалось отправить {display_name}: {str(e2)[:200]}")
-                                        continue
+                                        await app.bot.send_message(chat_id=chat_id, text=f"❌ Не удалось отправить {display_name}: {e2}")
 
                             add_stats(f_path.stat().st_size)
 
-                            if task.get('index') == task.get('total'):
+                            await asyncio.sleep(TRACK_DELAY_SECONDS)
+                            gc.collect()
+
+                            batch_total = task.get('batch_total')
+                            batch_index = task.get('batch_index')
+                            if batch_total and batch_index == batch_total:
                                 try:
                                     await app.bot.send_message(
-                                        chat_id=task['chat_id'],
+                                        chat_id=chat_id,
                                         text='Загружено при поддержке #BocchiIsAlive <tg-emoji emoji-id="6041593232423391328">💠</tg-emoji>',
                                         parse_mode='HTML'
                                     )
                                     await app.bot.send_message(
-                                        chat_id=task['chat_id'],
+                                        chat_id=chat_id,
                                         text="🎸 Все треки обработаны. Выбери следующее действие:",
                                         reply_markup=main_markup
                                     )
                                 except Exception as e:
                                     logger.error(f"Ошибка финального сообщения: {e}")
+
+                            if status_msg:
+                                try:
+                                    await status_msg.delete()
+                                except:
+                                    pass
+                            prev = chat_temp_msg.pop(chat_id, None)
+                            if prev:
+                                try:
+                                    await app.bot.delete_message(chat_id=chat_id, message_id=prev)
+                                except:
+                                    pass
 
                     except Exception as e:
                         logger.error(f"Ошибка воркера: {e}", exc_info=True)
@@ -1107,41 +1397,43 @@ async def worker_loop(app):
                             try:
                                 await status_msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
                             except:
-                                await app.bot.send_message(chat_id=task['chat_id'], text=f"❌ Ошибка: {str(e)[:200]}")
+                                await app.bot.send_message(chat_id=chat_id, text=f"❌ Ошибка: {str(e)[:200]}")
+                        if "Forbidden" in str(e) or "Chat not found" in str(e):
+                            add_pending_task(chat_id, task)
                     finally:
                         shutil.rmtree(tmp_dir, ignore_errors=True)
                         download_queue.task_done()
                         active_tasks_count -= 1
                         worker_busy = False
-                        if status_msg:
-                            try:
-                                await status_msg.delete()
-                            except:
-                                pass
+                        current_task_info.pop(task_id, None)
+                        active_status_msgs.pop(task_id, None)
+                        save_active_msgs()
+                        save_queue_state()
         except Exception as e:
             logger.critical(f"Воркер упал: {e}", exc_info=True)
             await asyncio.sleep(10)
 
 # --- ПЕРИОДИЧЕСКАЯ ПРОВЕРКА ТОКЕНОВ ---
 async def check_all_tokens(app):
-    for chat_id, user_data in app.user_data.items():
-        token_time = user_data.get('token_time')
-        if token_time:
-            time_left = TOKEN_LIFETIME - (time.time() - token_time)
-            if 0 < time_left < 3600:
-                try:
-                    await app.bot.send_message(
-                        chat_id,
-                        f"⏰ Токен истечёт через {int(time_left//60)} минут. Обновите его через /start или кнопку «Обновить токен»."
-                    )
-                except Exception as e:
-                    logger.error(f"Не удалось отправить напоминание: {e}")
+    now = time.time()
+    changed = False
+    for uid, data in list(user_tokens.items()):
+        if now - data['timestamp'] > TOKEN_LIFETIME:
+            user_tokens.pop(uid, None)
+            changed = True
+    if changed:
+        save_user_tokens()
 
 # --- ЗАПУСК ---
 async def post_init(app):
     global download_semaphore, download_queue, worker_task
     download_semaphore = asyncio.Semaphore(1)
     download_queue = asyncio.Queue()
+    load_user_tokens()
+    load_active_msgs()
+    load_pending_tasks()
+    load_queue_state()
+    await cleanup_orphan_messages(app)
     worker_task = asyncio.create_task(worker_loop(app))
     app.job_queue.run_repeating(lambda _: asyncio.create_task(check_all_tokens(app)), interval=900, first=10)
 
@@ -1152,6 +1444,7 @@ def main():
             with open(STATS_FILE, "w") as f:
                 f.write("0")
         app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+        app.add_handler(CallbackQueryHandler(restart_stuck_task_callback, pattern="restart_stuck_task"))
         conv = ConversationHandler(
             entry_points=[CommandHandler('start', start), MessageHandler(filters.Regex('^🎵 Начать работу$'), handle_download)],
             states={
