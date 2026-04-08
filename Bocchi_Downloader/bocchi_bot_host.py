@@ -1,13 +1,15 @@
 # (c) 2026 Hanako
 # Проект "Bocchi Downloader" (Server Edition)
-# ОБЪЕДИНЁННАЯ ВЕРСИЯ (финальная):
+
+# Изменения:
 # - Универсальный парсинг ссылок + обработка альбомов/плейлистов
-# - Сжатие обложек (Pillow) и fallback отправка (аудио -> документ)
+# - Сжатие обложек (Pillow) с многоступенчатыми попытками
+# - Fallback отправка (аудио -> документ)
 # - Загрузка файлов >49 МБ на Litterbox/Catbox
 # - Анимированная отправка сообщений (draft-методы)
 # - Автоматическое понижение качества при нехватке места на диске (<20 МБ)
-# - (Защита от падения при достижении 256 МБ)
 # - Проверка диска перед каждым треком
+# - Исправлена логика обложек: приоритет из аудио, затем iTunes, сжатие до 200 КБ
 
 import asyncio
 import logging
@@ -42,6 +44,9 @@ from telegram.ext import (
 from yandex_music import Client
 from PIL import Image
 
+# Устанавливаем уровень логов для httpx, чтобы избежать ошибки форматирования
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 load_dotenv()
 
 # --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
@@ -57,7 +62,7 @@ DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
 CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))
 DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))
-MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))  # минимально свободного места на диске
+MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))
 
 BOT_START_TIME = time.time()
 
@@ -79,29 +84,14 @@ user_locks = {}
 
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
-# --- КАЧЕСТВО (текстовые кнопки) ---
-QUALITY_NAMES = {
-    0: "Низкое",
-    1: "Среднее",
-    2: "Высокое"
-}
-QUALITY_NAMES_GENITIVE = {
-    0: "низкого",
-    1: "среднего",
-    2: "высокого"
-}
-QUALITY_BUTTONS = {
-    "Низкое": 0,
-    "Среднее": 1,
-    "Высокое": 2
-}
+# --- КАЧЕСТВО ---
+QUALITY_NAMES = {0: "Низкое", 1: "Среднее", 2: "Высокое"}
+QUALITY_NAMES_GENITIVE = {0: "низкого", 1: "среднего", 2: "высокого"}
+QUALITY_BUTTONS = {"Низкое": 0, "Среднее": 1, "Высокое": 2}
 
-quality_keyboard = [
-    [KeyboardButton("Низкое"), KeyboardButton("Среднее"), KeyboardButton("Высокое")]
-]
+quality_keyboard = [[KeyboardButton("Низкое"), KeyboardButton("Среднее"), KeyboardButton("Высокое")]]
 quality_markup = ReplyKeyboardMarkup(quality_keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# --- ГЛАВНОЕ МЕНЮ ---
 main_menu_keyboard = [
     ["🎵 Начать загрузку", "❌ Удалить токен"],
     ["🔄 Обновить токен", "⚙️ Качество"]
@@ -111,9 +101,7 @@ main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
 # ===================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====================
 
 def is_message_too_old(update: Update) -> bool:
-    if update.message:
-        return update.message.date.timestamp() < BOT_START_TIME
-    return False
+    return update.message.date.timestamp() < BOT_START_TIME if update.message else False
 
 def is_token_valid(context: ContextTypes.DEFAULT_TYPE) -> bool:
     if 'yandex_token' not in context.user_data:
@@ -158,39 +146,54 @@ def fetch_metadata_from_itunes(artist, title):
     return {}
 
 def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> bytes | None:
-    """Сжимает обложку до указанного максимального размера (по умолчанию 200 KB)."""
+    """Сжимает обложку до указанного максимального размера с многоступенчатыми попытками."""
     if not cover_bytes or len(cover_bytes) <= max_size_bytes:
         return cover_bytes
     try:
         img = Image.open(io.BytesIO(cover_bytes))
         if img.mode in ('RGBA', 'P'):
             img = img.convert('RGB')
-        quality = 85
-        while quality >= 30:
+        
+        # Этап 1: снижение качества JPEG
+        for quality in [85, 75, 65, 55, 45, 35, 25]:
             output = io.BytesIO()
             img.save(output, format='JPEG', quality=quality, optimize=True)
             if output.tell() <= max_size_bytes:
+                logger.info(f"Обложка сжата качеством {quality}: {len(cover_bytes)} -> {output.tell()} байт")
                 return output.getvalue()
-            quality -= 10
-        for scale in [0.75, 0.5, 0.3]:
+        
+        # Этап 2: уменьшение размеров
+        for scale in [0.75, 0.5, 0.3, 0.2, 0.15]:
             new_size = (int(img.width * scale), int(img.height * scale))
+            if new_size[0] < 10 or new_size[1] < 10:
+                continue
             resized = img.resize(new_size, Image.Resampling.LANCZOS)
             output = io.BytesIO()
             resized.save(output, format='JPEG', quality=75, optimize=True)
             if output.tell() <= max_size_bytes:
+                logger.info(f"Обложка сжата уменьшением до {new_size}: {len(cover_bytes)} -> {output.tell()} байт")
                 return output.getvalue()
-        output = io.BytesIO()
-        img.save(output, format='JPEG', quality=20, optimize=True)
-        if output.tell() <= max_size_bytes:
-            return output.getvalue()
-        logger.warning(f"Не удалось сжать обложку: исходный размер {len(cover_bytes)} байт, минимальный {output.tell()}")
+        
+        # Этап 3: экстремальное сжатие
+        for scale in [0.1, 0.08]:
+            new_size = (int(img.width * scale), int(img.height * scale))
+            if new_size[0] < 8 or new_size[1] < 8:
+                continue
+            resized = img.resize(new_size, Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            resized.save(output, format='JPEG', quality=30, optimize=True)
+            if output.tell() <= max_size_bytes:
+                logger.info(f"Обложка сжата экстремально (размер {new_size}, качество 30): {len(cover_bytes)} -> {output.tell()} байт")
+                return output.getvalue()
+        
+        logger.error(f"Не удалось сжать обложку: исходный размер {len(cover_bytes)} байт")
         return None
     except Exception as e:
         logger.error(f"Ошибка сжатия обложки: {e}")
         return None
 
 def extract_cover_from_audio(file_path: Path) -> bytes | None:
-    """Извлекает обложку из аудиофайла (резервный метод)."""
+    """Извлекает обложку из аудиофайла (без проверки размера, сжатие позже)."""
     try:
         audio = File(file_path)
         if audio is None:
@@ -205,17 +208,13 @@ def extract_cover_from_audio(file_path: Path) -> bytes | None:
             cover_data = audio.tags['covr'][0]
             if isinstance(cover_data, MP4Cover):
                 cover_data = bytes(cover_data)
-        if cover_data and len(cover_data) > 200 * 1024:
-            logger.warning(f"Обложка слишком большая ({len(cover_data)} байт), пропускаем.")
-            return None
         return cover_data
     except Exception as e:
         logger.warning(f"Не удалось извлечь обложку: {e}")
         return None
 
 def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
-    """Проверяет, есть ли на диске минимум min_free_mb МБ свободного места.
-    Возвращает (достаточно_места, свободно_мб)."""
+    """Проверяет, есть ли на диске минимум min_free_mb МБ свободного места."""
     try:
         stat = shutil.disk_usage(Path.cwd())
         free_mb = stat.free / (1024 * 1024)
@@ -225,7 +224,7 @@ def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
         return True, free_mb
     except Exception as e:
         logger.error(f"Ошибка проверки диска: {e}")
-        return True, 9999  # на всякий случай не блокируем
+        return True, 9999
 
 def cleanup_old_tmp_dirs():
     count = 0
@@ -271,21 +270,15 @@ def set_user_quality(context: ContextTypes.DEFAULT_TYPE, quality: int):
     return False
 
 def extract_base_url(url: str) -> str:
-    """Извлекает базовый URL для Яндекс.Музыки, сохраняя оригинальный домен."""
     match = re.match(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3})(?:/music)?', url, re.IGNORECASE)
     if match:
         base_domain = match.group(1)
         if '/music' in url or re.search(r'//music\.', url, re.IGNORECASE):
             return base_domain
         return f"{base_domain}/music"
-    logger.warning(f"Не удалось извлечь домен из URL: {url}, использую fallback")
     return "https://music.yandex.ru"
 
 def parse_yandex_url(url: str):
-    """
-    Определяет тип контента и извлекает ID.
-    Возвращает (type, id, username) где type: 'track', 'album', 'playlist'
-    """
     parsed = urlparse(url)
     path = parsed.path
     query = parse_qs(parsed.query)
@@ -293,29 +286,24 @@ def parse_yandex_url(url: str):
     track_match = re.search(r'/track/(\d+)', path)
     if track_match:
         return ('track', track_match.group(1), None)
-
     if '/album/' in path and '/track/' not in path:
         album_match = re.search(r'/album/(\d+)', path)
         if album_match:
             return ('album', album_match.group(1), None)
-
     playlist_match = re.search(r'/users/([^/]+)/playlists/(\d+)', path)
     if playlist_match:
         return ('playlist', playlist_match.group(2), playlist_match.group(1))
-
     playlist_match2 = re.search(r'/playlist/(\d+)', path)
     if playlist_match2:
         return ('playlist', playlist_match2.group(1), None)
-
     if 'handlers/playlist.jsx' in path:
         owner = query.get('owner', [None])[0]
         kinds = query.get('kinds', [None])[0]
         if owner and kinds:
             return ('playlist', kinds, owner)
-
     return (None, None, None)
 
-# --- АНИМИРОВАННАЯ ОТПРАВКА (с draft-методами) ---
+# --- АНИМИРОВАННАЯ ОТПРАВКА ---
 async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
     draft_id = int(time.time() * 1000) + random.randint(1, 10000)
     for attempt in range(max_retries):
@@ -607,7 +595,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
-# --- ПРОЦЕССОР ССЫЛОК (универсальный) ---
+# --- ПРОЦЕССОР ССЫЛОК ---
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
@@ -743,7 +731,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
     global active_tasks_count
     active_tasks_count += len(all_tasks)
 
-# --- ВОРКЕР (с проверкой диска и понижением качества) ---
+# --- ВОРКЕР (с исправленной логикой обложек) ---
 async def worker_loop(app):
     global worker_busy, active_tasks_count
     while True:
@@ -793,11 +781,9 @@ async def worker_loop(app):
                         quality_to_try = current_quality
 
                         while attempt < max_attempts and not success:
-                            # --- ПРОВЕРКА СВОБОДНОГО МЕСТА НА ДИСКЕ ПЕРЕД ПОПЫТКОЙ СКАЧИВАНИЯ ---
                             enough_space, free_mb = check_disk_space(MIN_FREE_DISK_MB)
                             if not enough_space:
                                 if quality_to_try > 0:
-                                    # Понижаем качество
                                     new_q = quality_to_try - 1
                                     quality_gen = QUALITY_NAMES_GENITIVE[new_q]
                                     await app.bot.send_message(
@@ -821,7 +807,6 @@ async def worker_loop(app):
                                     )
                                     break
 
-                            # --- ЗАПУСК ЗАГРУЗЧИКА ---
                             returncode, stdout, stderr = await run_downloader(quality_to_try)
                             if returncode == 0:
                                 success = True
@@ -839,7 +824,6 @@ async def worker_loop(app):
                                 )
                                 break
 
-                            # Ошибка -9 (память) – оставляем для совместимости, но основная проверка теперь по диску
                             if returncode == -9:
                                 if quality_to_try > 0:
                                     new_q = quality_to_try - 1
@@ -884,7 +868,7 @@ async def worker_loop(app):
                                 parse_mode='Markdown'
                             )
 
-                        # Обработка скачанных файлов
+                        # --- Обработка скачанных файлов ---
                         files = [f for f in tmp_dir.rglob('*') if f.suffix.lower() in ['.mp3', '.m4a']]
                         for f_path in files:
                             file_size_mb = f_path.stat().st_size / (1024 * 1024)
@@ -985,10 +969,30 @@ async def worker_loop(app):
                                                            text=f"❌ Не найден файл {display_name}.")
                                 continue
 
+                            # --- ИЗВЛЕЧЕНИЕ И СЖАТИЕ ОБЛОЖКИ (приоритет из аудио) ---
                             cover_bytes = extract_cover_from_audio(f_path)
+                            if not cover_bytes and itunes_data.get('cover_bytes'):
+                                cover_bytes = itunes_data['cover_bytes']
+                                logger.info("Обложка не найдена в аудиофайле, использую iTunes.")
+                            
+                            thumbnail = None
                             if cover_bytes:
-                                cover_bytes = compress_cover(cover_bytes)
+                                original_size = len(cover_bytes)
+                                if original_size > 200 * 1024:
+                                    logger.info(f"Обложка слишком большая ({original_size} байт), выполняется попытка сжатия.")
+                                    compressed = compress_cover(cover_bytes, max_size_bytes=200*1024)
+                                    if compressed:
+                                        thumbnail = compressed
+                                        logger.info(f"Обложка успешно сжата: {original_size} -> {len(compressed)} байт.")
+                                    else:
+                                        logger.warning(f"Не удалось сжать обложку до допустимого размера. Отправляем без обложки.")
+                                else:
+                                    thumbnail = cover_bytes
+                                    logger.info(f"Обложка подходит по размеру ({original_size} байт).")
+                            else:
+                                logger.info("Обложка не найдена.")
 
+                            # --- ОТПРАВКА ---
                             if file_size_mb > 49.0:
                                 uploaded = False
                                 error_message = ""
@@ -1055,14 +1059,13 @@ async def worker_loop(app):
                                             title=title,
                                             duration=duration if duration > 0 else None,
                                             filename=safe_filename,
-                                            thumbnail=cover_bytes,
+                                            thumbnail=thumbnail,
                                             read_timeout=600, write_timeout=600,
                                             connect_timeout=600, pool_timeout=600
                                         )
                                     logger.info(f"Отправлен трек: {display_name}")
                                 except Exception as e:
                                     logger.error(f"Ошибка отправки аудио: {e}")
-                                    # Пробуем отправить как документ
                                     try:
                                         with open(f_path, 'rb') as f:
                                             await app.bot.send_document(
