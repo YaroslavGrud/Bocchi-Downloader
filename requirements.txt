@@ -21,7 +21,7 @@ psutil==7.2.2
 pycryptodome==3.23.0
 PySocks==1.7.1
 python-dotenv==1.2.2
-python-telegram-bot==22.7
+python-telegram-bot[job-queue]==22.7
 RapidFuzz==3.14.5
 requests==2.33.1
 soupsieve==2.8.3
