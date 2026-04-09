@@ -3,8 +3,8 @@ aiohappyeyeballs==2.6.1
 aiohttp==3.13.5
 aiosignal==1.4.0
 anyio==4.13.0
-APScheduler==3.11.2
 attrs==26.1.0
+beautifulsoup4==4.14.3
 catboxpy==0.1.1.1
 certifi==2026.2.25
 charset-normalizer==3.4.7
@@ -15,19 +15,20 @@ httpx==0.28.1
 idna==3.11
 multidict==6.7.1
 mutagen==1.47.0
+pillow==12.2.0
 propcache==0.4.1
 psutil==7.2.2
 pycryptodome==3.23.0
 PySocks==1.7.1
 python-dotenv==1.2.2
 python-telegram-bot==22.7
+RapidFuzz==3.14.5
 requests==2.33.1
+soupsieve==2.8.3
 StrEnum==0.4.15
+syncedlyrics==1.0.1
 typing_extensions==4.15.0
-tzdata==2026.1
-tzlocal==5.3.1
 urllib3==2.6.3
 yandex-music @ https://github.com/llistochek/yandex-music-api/archive/9623fbca7704f47766614efe51d66c9fd496714c.zip#sha256=44c897892a8a6463246b5dc18c340ddb0f25a312b12b1727820de8387235c857
 yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip#sha256=16ebe9e4b6ac1b4f88c6eb64ad9bf7d101f103f7ffd060a6f9f09ef4103eb323
 yarl==1.23.0
-Pillow==12.1.1
