@@ -1,5 +1,6 @@
 # (c) 2026 Hanako
-# Bocchi Downloader - ФИНАЛЬНАЯ ВЕРСИЯ С ПОДДЕРЖКОЙ ПЕРЕЗАПУСКА ЗАВИСШИХ ЗАДАЧ
+# Bocchi Downloader (Server Edition)
+# Релиз‑кандидат
 
 import asyncio
 import aiohttp
@@ -54,11 +55,12 @@ CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))
 DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))
 MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))
 TRACK_DELAY_SECONDS = float(os.getenv("TRACK_DELAY_SECONDS", "5.0"))
-STUCK_TIMEOUT = int(os.getenv("STUCK_TIMEOUT", "120"))  # 2 минуты
+STUCK_TIMEOUT = int(os.getenv("STUCK_TIMEOUT", "120"))
 QUEUE_STATE_FILE = "download_queue_state.json"
 USER_TOKENS_FILE = "user_tokens.json"
 ACTIVE_MSGS_FILE = "active_status_msgs.json"
 PENDING_TASKS_FILE = "pending_tasks.json"
+ACCUMULATION_DELAY = 5.0  # задержка накопления ссылок (секунды)
 
 BOT_START_TIME = time.time()
 
@@ -78,7 +80,7 @@ user_locks = {}
 user_tokens = {}
 active_status_msgs = {}
 pending_tasks = {}
-current_task_info = {}  # task_id -> {"start_time": float, "chat_id": int, "task": dict, "process": asyncio.subprocess.Process}
+current_task_info = {}
 
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
@@ -91,7 +93,8 @@ quality_markup = ReplyKeyboardMarkup(quality_keyboard, resize_keyboard=True, one
 
 main_menu_keyboard = [
     ["🎵 Начать загрузку", "❌ Удалить токен"],
-    ["🔄 Обновить токен", "⚙️ Качество"]
+    ["🔄 Обновить токен", "⚙️ Качество"],
+    ["❌ Отменить загрузку", "🛑 Экстренная остановка"]
 ]
 main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
 
@@ -425,6 +428,13 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_markup
     )
 
+async def show_main_menu_from_chat(bot, chat_id):
+    await send_animated_message(
+        bot, chat_id,
+        "🎸 Главное меню:",
+        reply_markup=main_markup
+    )
+
 async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return
@@ -442,6 +452,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_LINK
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
+
+    queue_size = download_queue.qsize()
+    if queue_size > 0:
+        await update.message.reply_text(
+            f"🔄 Бот продолжает загрузку ({queue_size} треков в очереди). Используйте /menu для управления."
+        )
+        return WAITING_FOR_LINK
+
     lock = user_locks.get(user_id)
     if lock is None:
         lock = asyncio.Lock()
@@ -474,6 +492,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
         )
         return WAITING_FOR_LINK
+
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_message_too_old(update):
+        return WAITING_FOR_LINK
+    if user_processing.get(update.effective_user.id):
+        await update.message.reply_text(
+            "⏳ У вас уже идёт загрузка. Дождитесь завершения или используйте кнопку «❌ Отменить загрузку»."
+        )
+        return WAITING_FOR_LINK
+    await show_main_menu(update, context)
+    return WAITING_FOR_LINK
 
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
@@ -572,15 +601,109 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_main_menu(update, context)
+# ===================== ОТМЕНА ЗАГРУЗКИ (ОБЩАЯ ЛОГИКА) =====================
+async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
 
-# ===================== КНОПКА "БОТ НЕ ОТВЕЧАЕТ?" =====================
+    tasks_to_cancel = []
+    for task_id, info in list(current_task_info.items()):
+        if info['chat_id'] == chat_id:
+            tasks_to_cancel.append((task_id, info))
+
+    if not tasks_to_cancel:
+        msg = "❌ Нет активных задач для отмены."
+        if is_callback:
+            await update.callback_query.edit_message_text(msg)
+        else:
+            await update.message.reply_text(msg)
+        return
+
+    cancelled_count = 0
+    for task_id, info in tasks_to_cancel:
+        proc = info.get('process')
+        track_name = info['task']['track_name']
+        if is_callback:
+            await update.callback_query.edit_message_text(f"🛑 Завершаю обработку: {track_name}...")
+        else:
+            await update.message.reply_text(f"🛑 Завершаю обработку: {track_name}...")
+        if proc and not proc.returncode:
+            try:
+                proc.kill()
+                await proc.wait()
+            except:
+                pass
+        msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
+        if msg_id:
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except:
+                pass
+        current_task_info.pop(task_id, None)
+        cancelled_count += 1
+
+    remaining_tasks = []
+    while not download_queue.empty():
+        try:
+            t = download_queue.get_nowait()
+            if t.get('user_id') != user_id:
+                remaining_tasks.append(t)
+            else:
+                cancelled_count += 1
+        except asyncio.QueueEmpty:
+            break
+    for t in remaining_tasks:
+        await download_queue.put(t)
+
+    save_queue_state()
+    msg = f"✅ Загрузка отменена. Отменено задач: {cancelled_count}."
+    if is_callback:
+        await update.callback_query.edit_message_text(msg)
+    else:
+        await update.message.reply_text(msg)
+    await show_main_menu_from_chat(context.bot, chat_id)
+
+async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cancel_download(update, context, is_callback=True)
+
+# ===================== ЭКСТРЕННАЯ ОСТАНОВКА (KILLSWITCH) =====================
+async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("🛑 Экстренная остановка... Убиваю все процессы и очищаю очередь.")
+
+    for task_id, info in list(current_task_info.items()):
+        proc = info.get('process')
+        if proc and not proc.returncode:
+            try:
+                proc.kill()
+                await proc.wait()
+            except:
+                pass
+        msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
+        if msg_id:
+            try:
+                await context.bot.delete_message(chat_id=info['chat_id'], message_id=msg_id)
+            except:
+                pass
+    current_task_info.clear()
+
+    while not download_queue.empty():
+        try:
+            download_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    save_queue_state()
+    save_active_msgs()
+
+    await update.message.reply_text("✅ Экстренная остановка выполнена. Все загрузки прерваны. Используйте /start для перезапуска.")
+    await show_main_menu_from_chat(context.bot, chat_id)
+
+# ===================== ПЕРЕЗАПУСК ЗАВИСШЕЙ ЗАДАЧИ =====================
 async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
-    # Ищем зависшую задачу для этого чата
     stuck_task_id = None
     stuck_info = None
     for task_id, info in current_task_info.items():
@@ -591,7 +714,6 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
     if not stuck_info:
         await query.edit_message_text("❌ Нет зависших задач для этого чата.")
         return
-    # Отменяем процесс
     proc = stuck_info.get('process')
     if proc and not proc.returncode:
         try:
@@ -600,16 +722,13 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
             logger.info(f"Убит зависший процесс для задачи {stuck_task_id}")
         except Exception as e:
             logger.error(f"Ошибка при убийстве процесса: {e}")
-    # Удаляем временное сообщение
     msg_id = active_status_msgs.pop(stuck_task_id, {}).get('message_id')
     if msg_id:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except:
             pass
-    # Удаляем запись из current_task_info
     current_task_info.pop(stuck_task_id, None)
-    # Перезапускаем задачу (ставим обратно в очередь)
     task = stuck_info['task']
     await download_queue.put(task)
     await query.edit_message_text(f"🔄 Задача «{task['track_name']}» перезапущена. Продолжаю загрузку...")
@@ -646,6 +765,12 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "⚙️ Качество":
         await cmd_quality(update, context)
         return WAITING_FOR_LINK
+    if text == "❌ Отменить загрузку":
+        await cancel_download(update, context, is_callback=False)
+        return WAITING_FOR_LINK
+    if text == "🛑 Экстренная остановка":
+        await emergency_stop(update, context)
+        return WAITING_FOR_LINK
     if text in QUALITY_BUTTONS:
         new_q = QUALITY_BUTTONS[text]
         if set_user_quality(context, new_q):
@@ -663,7 +788,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message = update.message
 
-    # Проверяем, есть ли отложенные задачи для этого чата
     pending = get_pending_tasks(chat_id)
     if pending:
         await context.bot.send_message(chat_id, f"🔄 Обнаружены отложенные задачи ({len(pending)} треков). Продолжаю загрузку...")
@@ -686,8 +810,14 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return WAITING_FOR_TOKEN
 
+    # УЛУЧШЕННЫЙ ПОИСК ССЫЛОК (разбиваем на слова)
     content = (update.message.text or "") + " " + (update.message.caption or "")
-    urls = re.findall(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?/(?:track|album|playlist|handlers/playlist\.jsx)[^\s]*)', content)
+    urls = []
+    for word in content.split():
+        if 'yandex.' in word and ('/track/' in word or '/album/' in word or '/playlist/' in word):
+            # Очищаем от знаков пунктуации в конце
+            word = word.strip('.,!?;:()[]{}"\'')
+            urls.append(word)
     if not urls:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -709,6 +839,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_LINK
 
     async def safe_process():
+        # Увеличенная задержка для накопления ссылок (5 секунд)
+        await asyncio.sleep(ACCUMULATION_DELAY)
         token = get_user_token(user_id)
         if not token:
             await context.bot.send_message(chat_id, "❌ Токен не найден. Авторизуйтесь заново.")
@@ -733,11 +865,12 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     return WAITING_FOR_LINK
 
-# ===================== ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ССЫЛОК =====================
+# ===================== ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ССЫЛОК (ПАКЕТНАЯ) =====================
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
-    await asyncio.sleep(0.5)
+    # Дополнительная задержка перед обработкой (на всякий случай)
+    await asyncio.sleep(ACCUMULATION_DELAY)
 
     if user_id not in link_accumulators or not link_accumulators[user_id]:
         user_processing.pop(user_id, None)
@@ -763,9 +896,7 @@ async def process_accumulated_links(user_id, chat_id, context, token):
         await context.bot.send_message(chat_id, "❌ Ошибка авторизации. Попробуйте снова.")
         return
 
-    current_queue_size = download_queue.qsize()
-    added_count = 0
-
+    all_tracks = []
     for url in raw_links:
         base_url = extract_base_url(url)
         content_type, content_id, username = parse_yandex_url(url)
@@ -782,29 +913,13 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     artist = t.artists[0].name if t.artists else "Неизвестен"
                     title = t.title
                     track_name = f"{artist} — {title}"
-                    queue_pos = current_queue_size + added_count + 1
-                    await context.bot.send_message(
-                        chat_id,
-                        f"🎵 Загружаю трек: *{track_name}*. Ваша очередь: {queue_pos}",
-                        parse_mode='Markdown'
-                    )
-                    batch_id = f"{user_id}_{int(time.time())}_{content_id}"
-                    task_item = {
-                        'chat_id': chat_id,
+                    all_tracks.append({
                         'url': url,
-                        'token': token,
                         'artist': artist,
                         'title': title,
-                        'duration': 0,
-                        'track_name': track_name,
-                        'quality': get_user_quality(context),
-                        'batch_id': batch_id,
-                        'batch_index': 1,
-                        'batch_total': 1,
-                        'user_id': user_id
-                    }
-                    await download_queue.put(task_item)
-                    added_count += 1
+                        'duration': t.duration_ms // 1000 if t.duration_ms else 0,
+                        'track_name': track_name
+                    })
                 else:
                     await context.bot.send_message(chat_id, f"❌ Трек не найден: {url}")
 
@@ -829,46 +944,20 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                             'url': f"{base_url}/track/{track_id}",
                             'artist': artist,
                             'title': title,
-                            'name': f"{artist} — {title}"
+                            'duration': track.get('duration_ms', 0) // 1000,
+                            'track_name': f"{artist} — {title}"
                         })
                 if not track_list:
                     await context.bot.send_message(chat_id, f"❌ Альбом пуст: {url}")
                     continue
-                total_tracks = len(track_list)
-                queue_pos = current_queue_size + added_count + 1
-                await context.bot.send_message(
-                    chat_id,
-                    f"📀 Загружаю альбом: *{album_title}* ({get_plural_tracks(total_tracks)}). Ваша очередь: {queue_pos}",
-                    parse_mode='Markdown'
-                )
-                batch_id = f"{user_id}_{int(time.time())}_{content_id}"
-                for idx, track_info in enumerate(track_list):
-                    task_item = {
-                        'chat_id': chat_id,
-                        'url': track_info['url'],
-                        'token': token,
-                        'artist': track_info['artist'],
-                        'title': track_info['title'],
-                        'duration': 0,
-                        'track_name': track_info['name'],
-                        'quality': get_user_quality(context),
-                        'batch_id': batch_id,
-                        'batch_index': idx + 1,
-                        'batch_total': total_tracks,
-                        'user_id': user_id
-                    }
-                    await download_queue.put(task_item)
-                    added_count += 1
+                all_tracks.extend(track_list)
 
             elif content_type == 'playlist':
-                # ВНИМАНИЕ: API Яндекс.Музыки не позволяет получить треки из служебных плейлистов с префиксами ps., lk., pl.
-                # Это ограничение самого API, а не бота. Такие плейлисты (например, «Моя волна») не поддерживаются.
                 content_id_str = str(content_id)
                 if content_id_str.startswith(('ps.', 'lk.', 'pl.')):
                     await context.bot.send_message(
                         chat_id,
-                        f"⚠️ Плейлист «{content_id_str}» является персональной подборкой Яндекс.Музыки (например, «Моя волна»). "
-                        f"API не позволяет получить его треки. Пожалуйста, создайте обычный плейлист и добавьте в него нужные треки вручную."
+                        f"⚠️ Плейлист «{content_id_str}» является персональной подборкой Яндекс.Музыки (например, «Моя волна»). API не позволяет получить его треки. Пожалуйста, создайте обычный плейлист и добавьте в него нужные треки вручную."
                     )
                     continue
 
@@ -911,47 +1000,51 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                         'url': f"{base_url}/track/{track_id}",
                         'artist': artist,
                         'title': title,
-                        'name': f"{artist} — {title}"
+                        'duration': track.get('duration_ms', 0) // 1000,
+                        'track_name': f"{artist} — {title}"
                     })
                 if not track_list:
                     await context.bot.send_message(chat_id, f"❌ Плейлист пуст: {url}")
                     continue
-                total_tracks = len(track_list)
-                queue_pos = current_queue_size + added_count + 1
-                await context.bot.send_message(
-                    chat_id,
-                    f"🎧 Загружаю плейлист: *{playlist_title}* ({get_plural_tracks(total_tracks)}). Ваша очередь: {queue_pos}",
-                    parse_mode='Markdown'
-                )
-                batch_id = f"{user_id}_{int(time.time())}_{content_id}"
-                for idx, track_info in enumerate(track_list):
-                    task_item = {
-                        'chat_id': chat_id,
-                        'url': track_info['url'],
-                        'token': token,
-                        'artist': track_info['artist'],
-                        'title': track_info['title'],
-                        'duration': 0,
-                        'track_name': track_info['name'],
-                        'quality': get_user_quality(context),
-                        'batch_id': batch_id,
-                        'batch_index': idx + 1,
-                        'batch_total': total_tracks,
-                        'user_id': user_id
-                    }
-                    await download_queue.put(task_item)
-                    added_count += 1
+                all_tracks.extend(track_list)
 
         except Exception as e:
             logger.error(f"Ошибка парсинга {url}: {e}")
             await context.bot.send_message(chat_id, f"❌ Ошибка при обработке ссылки {url}: {str(e)[:100]}")
 
-    if added_count == 0:
+    if not all_tracks:
         await context.bot.send_message(chat_id, "❌ Не удалось найти треки по ссылкам.")
         return
 
+    total_tracks = len(all_tracks)
+    current_queue_size = download_queue.qsize()
+    batch_id = f"{user_id}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+
+    queue_pos = current_queue_size + 1
+    await context.bot.send_message(
+        chat_id,
+        f"📥 Приняла запрос на {get_plural_tracks(total_tracks)}. Ваша очередь: {queue_pos}"
+    )
+
+    for idx, track_info in enumerate(all_tracks):
+        task_item = {
+            'chat_id': chat_id,
+            'url': track_info['url'],
+            'token': token,
+            'artist': track_info['artist'],
+            'title': track_info['title'],
+            'duration': track_info['duration'],
+            'track_name': track_info['track_name'],
+            'quality': get_user_quality(context),
+            'batch_id': batch_id,
+            'batch_index': idx + 1,
+            'batch_total': total_tracks,
+            'user_id': user_id
+        }
+        await download_queue.put(task_item)
+
     global active_tasks_count
-    active_tasks_count += added_count
+    active_tasks_count += total_tracks
     save_queue_state()
 
 # ===================== СОХРАНЕНИЕ И ВОССТАНОВЛЕНИЕ ОЧЕРЕДИ =====================
@@ -1023,7 +1116,6 @@ async def worker_loop(app):
                     stuck_notification_sent = False
                     downloader_process = None
                     try:
-                        # Удаляем предыдущее висящее сообщение
                         old_info = active_status_msgs.pop(task_id, None)
                         if old_info:
                             try:
@@ -1038,22 +1130,26 @@ async def worker_loop(app):
                                 pass
 
                         tmp_dir.mkdir(parents=True, exist_ok=True)
+                        keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("❌ Отменить загрузку", callback_data="cancel_download")]
+                        ])
                         status_msg = await app.bot.send_message(
                             chat_id=chat_id,
-                            text=f"🌀 Обработка...\n{task['track_name']}\nКачество: {QUALITY_NAMES[current_quality]}"
+                            text=f"🌀 Обработка...\n{task['track_name']}\nКачество: {QUALITY_NAMES[current_quality]}",
+                            reply_markup=keyboard
                         )
                         active_status_msgs[task_id] = {"chat_id": chat_id, "message_id": status_msg.message_id}
                         save_active_msgs()
 
                         await app.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-                        # Запоминаем время начала и задачу для кнопки
                         start_time = time.time()
                         current_task_info[task_id] = {
                             "start_time": start_time,
                             "chat_id": chat_id,
                             "task": task,
-                            "process": None
+                            "process": None,
+                            "status_msg_id": status_msg.message_id
                         }
 
                         async def run_downloader(quality):
@@ -1081,18 +1177,21 @@ async def worker_loop(app):
                         quality_to_try = current_quality
 
                         while attempt < max_attempts and not success:
-                            # Проверяем, не зависла ли задача (таймер 2 минуты)
                             if time.time() - start_time > STUCK_TIMEOUT and not stuck_notification_sent:
                                 stuck_notification_sent = True
-                                keyboard = InlineKeyboardMarkup([
-                                    [InlineKeyboardButton("⚠️ Бот не отвечает? Нажмите", callback_data="restart_stuck_task")]
+                                new_keyboard = InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("❌ Отменить загрузку", callback_data="cancel_download")],
+                                    [InlineKeyboardButton("🔄 Перезапустить загрузчик", callback_data="restart_stuck_task")]
                                 ])
-                                await app.bot.send_message(
-                                    chat_id=chat_id,
-                                    text="⏳ Обработка трека затягивается. Возможно, проблема с сервером. Нажмите кнопку, чтобы перезапустить задачу.",
-                                    reply_markup=keyboard
-                                )
-                                logger.warning(f"Задача {task_id} зависла, отправлено уведомление")
+                                try:
+                                    await app.bot.edit_message_reply_markup(
+                                        chat_id=chat_id,
+                                        message_id=status_msg.message_id,
+                                        reply_markup=new_keyboard
+                                    )
+                                    logger.warning(f"Задача {task_id} зависла, добавлена кнопка перезапуска")
+                                except Exception as e:
+                                    logger.error(f"Не удалось обновить клавиатуру: {e}")
 
                             enough_space, free_mb = check_disk_space(MIN_FREE_DISK_MB)
                             if not enough_space:
@@ -1186,7 +1285,6 @@ async def worker_loop(app):
                             attempt += 1
 
                         if not success:
-                            # Если не удалось скачать, удаляем задачу из current и переходим к следующей
                             current_task_info.pop(task_id, None)
                             save_queue_state()
                             continue
@@ -1445,6 +1543,7 @@ def main():
                 f.write("0")
         app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
         app.add_handler(CallbackQueryHandler(restart_stuck_task_callback, pattern="restart_stuck_task"))
+        app.add_handler(CallbackQueryHandler(cancel_download_callback, pattern="cancel_download"))
         conv = ConversationHandler(
             entry_points=[CommandHandler('start', start), MessageHandler(filters.Regex('^🎵 Начать работу$'), handle_download)],
             states={
@@ -1457,6 +1556,7 @@ def main():
         app.add_handler(CommandHandler('menu', menu))
         app.add_handler(CommandHandler('cancel', cancel))
         app.add_handler(CommandHandler('quality', cmd_quality))
+        app.add_handler(CommandHandler('stop', emergency_stop))
         app.add_handler(conv)
         app.run_polling()
     except KeyboardInterrupt:
