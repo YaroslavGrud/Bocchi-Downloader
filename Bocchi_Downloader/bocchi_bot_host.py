@@ -56,11 +56,11 @@ DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))
 MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))
 TRACK_DELAY_SECONDS = float(os.getenv("TRACK_DELAY_SECONDS", "5.0"))
 STUCK_TIMEOUT = int(os.getenv("STUCK_TIMEOUT", "120"))
+ACCUMULATION_DELAY = float(os.getenv("ACCUMULATION_DELAY", "5.0"))
 QUEUE_STATE_FILE = "download_queue_state.json"
 USER_TOKENS_FILE = "user_tokens.json"
 ACTIVE_MSGS_FILE = "active_status_msgs.json"
 PENDING_TASKS_FILE = "pending_tasks.json"
-ACCUMULATION_DELAY = 5.0  # задержка накопления ссылок (секунды)
 
 BOT_START_TIME = time.time()
 
@@ -219,32 +219,23 @@ def get_plural_tracks(n):
     else:
         return f"{n} треков"
 
-def fetch_metadata_from_itunes(artist, title):
+# ===================== РАБОТА С ОБЛОЖКАМИ =====================
+async def fetch_cover_from_yandex(cover_uri: str) -> bytes | None:
+    """Загружает обложку по cover_uri из API Яндекс.Музыки."""
+    if not cover_uri:
+        return None
     try:
-        query = urllib.parse.quote(f"{artist} {title}")
-        url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=1"
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data['resultCount'] > 0:
-                track = data['results'][0]
-                cover_url = track.get('artworkUrl100', '').replace('100x100bb.jpg', '1000x1000bb.jpg')
-                cover_bytes = None
-                if cover_url:
-                    cover_resp = requests.get(cover_url, timeout=10)
-                    if cover_resp.status_code == 200:
-                        cover_bytes = cover_resp.content
-                return {
-                    'album': track.get('collectionName'),
-                    'year': track.get('releaseDate', '')[:4],
-                    'genre': track.get('primaryGenreName'),
-                    'cover_bytes': cover_bytes
-                }
+        cover_url = f"https://{cover_uri.replace('%%', '1000x1000')}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(cover_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    return await resp.read()
     except Exception as e:
-        logger.error(f"Ошибка iTunes: {e}")
-    return {}
+        logger.warning(f"Не удалось загрузить обложку из Яндекса: {e}")
+    return None
 
 def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> bytes | None:
+    """Сжимает изображение обложки до заданного размера."""
     if not cover_bytes or len(cover_bytes) <= max_size_bytes:
         return cover_bytes
     try:
@@ -284,6 +275,7 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
         return None
 
 def extract_cover_from_audio(file_path: Path) -> bytes | None:
+    """Извлекает встроенную обложку из аудиофайла."""
     try:
         audio = File(file_path)
         if audio is None:
@@ -300,7 +292,7 @@ def extract_cover_from_audio(file_path: Path) -> bytes | None:
                 cover_data = bytes(cover_data)
         return cover_data
     except Exception as e:
-        logger.warning(f"Не удалось извлечь обложку: {e}")
+        logger.warning(f"Не удалось извлечь обложку из аудио: {e}")
         return None
 
 def get_audio_duration(file_path: Path) -> int:
@@ -366,6 +358,7 @@ def extract_base_url(url: str) -> str:
     return "https://music.yandex.ru"
 
 def parse_yandex_url(url: str):
+    """Улучшенный парсинг ссылок Яндекс.Музыки."""
     parsed = urlparse(url)
     path = parsed.path
     query = parse_qs(parsed.query)
@@ -374,18 +367,13 @@ def parse_yandex_url(url: str):
     if track_match:
         return ('track', track_match.group(1), None)
 
-    if '/album/' in path:
-        album_match = re.search(r'/album/(\d+)', path)
-        if album_match:
-            return ('album', album_match.group(1), None)
-        album_match2 = re.search(r'album/(\d+)', path)
-        if album_match2:
-            return ('album', album_match2.group(1), None)
+    album_match = re.search(r'/album/(\d+)', path)
+    if album_match:
+        return ('album', album_match.group(1), None)
 
     playlist_match = re.search(r'/users/([^/]+)/playlists/(\d+)', path)
     if playlist_match:
         return ('playlist', playlist_match.group(2), playlist_match.group(1))
-
     playlist_match2 = re.search(r'/playlist/(\d+)', path)
     if playlist_match2:
         return ('playlist', playlist_match2.group(1), None)
@@ -810,15 +798,17 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return WAITING_FOR_TOKEN
 
-    # УЛУЧШЕННЫЙ ПОИСК ССЫЛОК (разбиваем на слова)
+    # УЛУЧШЕННЫЙ ПОИСК ССЫЛОК (гибкое регулярное выражение)
     content = (update.message.text or "") + " " + (update.message.caption or "")
-    urls = []
-    for word in content.split():
-        if 'yandex.' in word and ('/track/' in word or '/album/' in word or '/playlist/' in word):
-            # Очищаем от знаков пунктуации в конце
-            word = word.strip('.,!?;:()[]{}"\'')
-            urls.append(word)
-    if not urls:
+    url_pattern = re.compile(r'https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?(?:/[^\s]+)?', re.IGNORECASE)
+    urls = url_pattern.findall(content)
+    valid_urls = []
+    for u in urls:
+        u = u.rstrip('.,!?;:()[]{}"\'')
+        parsed = parse_yandex_url(u)
+        if parsed[0] is not None:
+            valid_urls.append(u)
+    if not valid_urls:
         await context.bot.send_message(
             chat_id=chat_id,
             text="❌ Не удалось распознать ссылку. Убедитесь, что вы отправляете ссылку на трек, альбом или плейлист Яндекс.Музыки."
@@ -829,7 +819,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_delay_tasks[user_id].cancel()
     if user_id not in link_accumulators:
         link_accumulators[user_id] = []
-    link_accumulators[user_id].extend(urls)
+    link_accumulators[user_id].extend(valid_urls)
 
     if user_processing.get(user_id):
         try:
@@ -839,7 +829,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_LINK
 
     async def safe_process():
-        # Увеличенная задержка для накопления ссылок (5 секунд)
         await asyncio.sleep(ACCUMULATION_DELAY)
         token = get_user_token(user_id)
         if not token:
@@ -869,7 +858,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def process_accumulated_links(user_id, chat_id, context, token):
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
-    # Дополнительная задержка перед обработкой (на всякий случай)
     await asyncio.sleep(ACCUMULATION_DELAY)
 
     if user_id not in link_accumulators or not link_accumulators[user_id]:
@@ -913,12 +901,21 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     artist = t.artists[0].name if t.artists else "Неизвестен"
                     title = t.title
                     track_name = f"{artist} — {title}"
+                    cover_uri = t.cover_uri
+                    cover_bytes = await fetch_cover_from_yandex(cover_uri) if cover_uri else None
+                    album_name = t.albums[0].title if t.albums else None
+                    year = t.albums[0].year if t.albums and t.albums[0].year else None
+                    genre = t.albums[0].genre if t.albums and t.albums[0].genre else None
                     all_tracks.append({
                         'url': url,
                         'artist': artist,
                         'title': title,
                         'duration': t.duration_ms // 1000 if t.duration_ms else 0,
-                        'track_name': track_name
+                        'track_name': track_name,
+                        'cover_bytes': cover_bytes,
+                        'album': album_name,
+                        'year': year,
+                        'genre': genre
                     })
                 else:
                     await context.bot.send_message(chat_id, f"❌ Трек не найден: {url}")
@@ -931,6 +928,10 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     continue
                 album_data = data['result']
                 album_title = album_data.get('title', 'Неизвестный альбом')
+                album_cover_uri = album_data.get('cover_uri')
+                album_cover_bytes = await fetch_cover_from_yandex(album_cover_uri) if album_cover_uri else None
+                album_year = album_data.get('year')
+                album_genre = album_data.get('genre')
                 volumes = album_data.get('volumes', [])
                 track_list = []
                 for volume in volumes:
@@ -940,12 +941,18 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                             continue
                         artist = track.get('artists', [{}])[0].get('name', 'Неизвестен')
                         title = track.get('title', 'Неизвестный трек')
+                        track_cover_uri = track.get('cover_uri')
+                        cover_bytes = await fetch_cover_from_yandex(track_cover_uri) if track_cover_uri else album_cover_bytes
                         track_list.append({
                             'url': f"{base_url}/track/{track_id}",
                             'artist': artist,
                             'title': title,
                             'duration': track.get('duration_ms', 0) // 1000,
-                            'track_name': f"{artist} — {title}"
+                            'track_name': f"{artist} — {title}",
+                            'cover_bytes': cover_bytes,
+                            'album': album_title,
+                            'year': album_year,
+                            'genre': album_genre
                         })
                 if not track_list:
                     await context.bot.send_message(chat_id, f"❌ Альбом пуст: {url}")
@@ -977,13 +984,23 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                         playlist_data = data['result']
                         if 'playlist' in playlist_data:
                             playlist_data = playlist_data['playlist']
+                        owner = playlist_data.get('owner', {})
+                        owner_login = owner.get('login', '')
+                        if owner_login in ('yamusic', 'yandex', 'music.yandex'):
+                            await context.bot.send_message(
+                                chat_id,
+                                f"⚠️ Плейлист «{playlist_data.get('title', '')}» является служебным плейлистом Яндекса. Его треки недоступны через API."
+                            )
+                            success = False
+                            break
                         success = True
                         break
                     elif status == 403:
                         await context.bot.send_message(chat_id, f"🔒 Плейлист приватный: {url}")
                         break
                 if not success:
-                    await context.bot.send_message(chat_id, f"❌ Плейлист не найден или недоступен: {url}")
+                    if status != 403:
+                        await context.bot.send_message(chat_id, f"❌ Плейлист не найден или недоступен: {url}")
                     continue
 
                 playlist_title = playlist_data.get('title', 'Неизвестный плейлист')
@@ -996,12 +1013,22 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     track_id = track.get('id')
                     artist = track.get('artists', [{}])[0].get('name', 'Неизвестен')
                     title = track.get('title', 'Неизвестный трек')
+                    cover_uri = track.get('cover_uri')
+                    cover_bytes = await fetch_cover_from_yandex(cover_uri) if cover_uri else None
+                    album_info = track.get('albums', [{}])[0] if track.get('albums') else {}
+                    album_name = album_info.get('title')
+                    year = album_info.get('year')
+                    genre = album_info.get('genre')
                     track_list.append({
                         'url': f"{base_url}/track/{track_id}",
                         'artist': artist,
                         'title': title,
                         'duration': track.get('duration_ms', 0) // 1000,
-                        'track_name': f"{artist} — {title}"
+                        'track_name': f"{artist} — {title}",
+                        'cover_bytes': cover_bytes,
+                        'album': album_name,
+                        'year': year,
+                        'genre': genre
                     })
                 if not track_list:
                     await context.bot.send_message(chat_id, f"❌ Плейлист пуст: {url}")
@@ -1039,7 +1066,11 @@ async def process_accumulated_links(user_id, chat_id, context, token):
             'batch_id': batch_id,
             'batch_index': idx + 1,
             'batch_total': total_tracks,
-            'user_id': user_id
+            'user_id': user_id,
+            'cover_bytes': track_info.get('cover_bytes'),
+            'album': track_info.get('album'),
+            'year': track_info.get('year'),
+            'genre': track_info.get('genre')
         }
         await download_queue.put(task_item)
 
@@ -1060,7 +1091,12 @@ def save_queue_state():
         for task in tasks:
             download_queue.put_nowait(task)
         with open(QUEUE_STATE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(tasks, f, ensure_ascii=False, indent=2)
+            serializable = []
+            for t in tasks:
+                t_copy = t.copy()
+                t_copy.pop('cover_bytes', None)
+                serializable.append(t_copy)
+            json.dump(serializable, f, ensure_ascii=False, indent=2)
         logger.info(f"Сохранено {len(tasks)} задач в очередь")
     except Exception as e:
         logger.error(f"Ошибка сохранения очереди: {e}")
@@ -1078,6 +1114,7 @@ def load_queue_state():
                 token = get_user_token(user_id)
                 if token:
                     task['token'] = token
+                    task['cover_bytes'] = None
                     valid_tasks.append(task)
                 else:
                     logger.warning(f"Задача для пользователя {user_id} пропущена: нет валидного токена")
@@ -1152,12 +1189,12 @@ async def worker_loop(app):
                             "status_msg_id": status_msg.message_id
                         }
 
-                        async def run_downloader(quality):
+                        async def run_downloader(quality, tmp_dir_path):
                             nonlocal downloader_process
                             cmd = [
                                 DOWNLOADER_PATH, "--token", task['token'], "--quality", str(quality),
                                 "--embed-cover", "--cover-resolution", "original",
-                                "--dir", str(tmp_dir), "--url", task['url'],
+                                "--dir", str(tmp_dir_path), "--url", task['url'],
                                 "--path-pattern", "#artist - #title", "--lyrics-format", "lrc"
                             ]
                             proc = await asyncio.create_subprocess_exec(
@@ -1226,7 +1263,7 @@ async def worker_loop(app):
                                     )
                                     break
 
-                            returncode, stdout, stderr = await run_downloader(quality_to_try)
+                            returncode, stdout, stderr = await run_downloader(quality_to_try, tmp_dir)
                             if returncode == 0:
                                 success = True
                                 actual_quality_used = quality_to_try
@@ -1234,6 +1271,9 @@ async def worker_loop(app):
 
                             stderr_text = stderr.decode('utf-8', errors='replace')
                             logger.warning(f"Код {returncode}, stderr: {stderr_text[:200]}")
+
+                            shutil.rmtree(tmp_dir, ignore_errors=True)
+                            tmp_dir.mkdir(parents=True, exist_ok=True)
 
                             if returncode == -9:
                                 if quality_to_try > 0:
@@ -1307,26 +1347,60 @@ async def worker_loop(app):
                         for f_path in files:
                             file_size_mb = f_path.stat().st_size / (1024 * 1024)
 
-                            artist = task.get('artist')
-                            title = task.get('title')
+                            # --- ИЗВЛЕЧЕНИЕ МЕТАДАННЫХ ИЗ ФАЙЛА (ПРИОРИТЕТ) ---
+                            audio_tags = None
+                            try:
+                                if f_path.suffix.lower() == '.m4a':
+                                    audio_tags = MP4(f_path)
+                                else:
+                                    audio_tags = MP3(f_path, ID3=ID3)
+                            except Exception as e:
+                                logger.warning(f"Не удалось прочитать теги из файла {f_path}: {e}")
+
+                            artist = None
+                            title = None
+                            album = None
+                            year = None
+                            genre = None
                             duration = get_audio_duration(f_path)
 
-                            if not artist or not title:
+                            if audio_tags:
                                 try:
-                                    if f_path.suffix == '.m4a':
-                                        audio_read = MP4(f_path)
-                                        artist = audio_read.get('\xa9ART', ['Неизвестен'])[0]
-                                        title = audio_read.get('\xa9nam', [f_path.stem])[0]
+                                    if f_path.suffix.lower() == '.m4a':
+                                        artist = audio_tags.get('\xa9ART', [None])[0]
+                                        title = audio_tags.get('\xa9nam', [None])[0]
+                                        album = audio_tags.get('\xa9alb', [None])[0]
+                                        year = audio_tags.get('\xa9day', [None])[0]
+                                        genre = audio_tags.get('\xa9gen', [None])[0]
                                     else:
-                                        audio_t, audio_i = EasyID3(f_path), MP3(f_path)
-                                        artist = audio_t.get('artist', ['Неизвестен'])[0]
-                                        title = audio_t.get('title', [f_path.stem])[0]
+                                        easy = EasyID3(f_path)
+                                        artist = easy.get('artist', [None])[0]
+                                        title = easy.get('title', [None])[0]
+                                        album = easy.get('album', [None])[0]
+                                        if audio_tags.tags:
+                                            tdr = audio_tags.tags.get('TDRC')
+                                            if tdr:
+                                                year = str(tdr.text[0]) if hasattr(tdr, 'text') else str(tdr)
+                                            tcon = audio_tags.tags.get('TCON')
+                                            if tcon:
+                                                genre = str(tcon.text[0]) if hasattr(tcon, 'text') else str(tcon)
                                 except Exception as e:
-                                    logger.warning(f"Ошибка чтения данных: {e}")
-                                    artist = task.get('artist', 'Неизвестен')
-                                    title = task.get('title', f_path.stem)
+                                    logger.warning(f"Ошибка извлечения тегов из {f_path}: {e}")
 
-                            artist = artist.replace("#artist", "Неизвестен").strip()
+                            # Fallback к данным из task
+                            if not artist:
+                                artist = task.get('artist', 'Неизвестен')
+                            if not title:
+                                title = task.get('title', f_path.stem)
+                            if not album:
+                                album = task.get('album')
+                            if not year:
+                                year = task.get('year')
+                            if not genre:
+                                genre = task.get('genre')
+
+                            # Очистка
+                            artist = artist.replace("#artist", "").strip()
                             title = title.replace("#artist", "").replace("#title", "").strip(" -")
                             if not artist:
                                 artist = "Неизвестен"
@@ -1336,6 +1410,20 @@ async def worker_loop(app):
                             display_name = f"{artist} — {title}"
                             safe_filename = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
 
+                            # Обложка из файла
+                            cover_bytes = extract_cover_from_audio(f_path)
+                            if not cover_bytes:
+                                cover_bytes = task.get('cover_bytes')
+
+                            # Сжатие для thumbnail (Telegram)
+                            thumbnail = None
+                            if cover_bytes:
+                                if len(cover_bytes) > 200 * 1024:
+                                    thumbnail = compress_cover(cover_bytes, max_size_bytes=200*1024)
+                                else:
+                                    thumbnail = cover_bytes
+
+                            # Лирика
                             lyrics = None
                             lrc_files = list(tmp_dir.glob(f"{f_path.stem}.lrc"))
                             if lrc_files:
@@ -1345,63 +1433,7 @@ async def worker_loop(app):
                                 except:
                                     pass
 
-                            itunes_data = await asyncio.to_thread(fetch_metadata_from_itunes, artist, title)
-
-                            try:
-                                if f_path.suffix.lower() == '.m4a':
-                                    audio = MP4(f_path)
-                                    audio['aART'] = [artist]
-                                    audio.pop('\xa9cmt', None)
-                                    if itunes_data.get('album'): audio['\xa9alb'] = [itunes_data['album']]
-                                    if itunes_data.get('year'): audio['\xa9day'] = [str(itunes_data['year'])]
-                                    if itunes_data.get('genre'): audio['\xa9gen'] = [itunes_data['genre']]
-                                    if lyrics: audio['\xa9lyr'] = [lyrics]
-                                    if itunes_data.get('cover_bytes'):
-                                        audio['covr'] = [MP4Cover(itunes_data['cover_bytes'], imageformat=MP4Cover.FORMAT_JPEG)]
-                                    audio.save()
-                                else:
-                                    audio = MP3(f_path, ID3=ID3)
-                                    if audio.tags is None:
-                                        audio.add_tags()
-                                    audio.tags.add(TPE2(encoding=3, text=artist))
-                                    audio.tags.delall('COMM')
-                                    if itunes_data.get('album'): audio.tags.add(TALB(encoding=3, text=itunes_data['album']))
-                                    if itunes_data.get('year'): audio.tags.add(TDRC(encoding=3, text=str(itunes_data['year'])))
-                                    if itunes_data.get('genre'): audio.tags.add(TCON(encoding=3, text=itunes_data['genre']))
-                                    if lyrics:
-                                        audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
-                                    if itunes_data.get('cover_bytes'):
-                                        audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover',
-                                                            data=itunes_data['cover_bytes']))
-                                    audio.save()
-                            except Exception as tag_e:
-                                logger.error(f"Ошибка записи тегов: {tag_e}")
-
-                            new_f_path = f_path.with_name(safe_filename)
-                            try:
-                                f_path.rename(new_f_path)
-                                f_path = new_f_path
-                            except:
-                                try:
-                                    shutil.move(str(f_path), str(new_f_path))
-                                    f_path = new_f_path
-                                except:
-                                    pass
-
-                            cover_bytes = extract_cover_from_audio(f_path)
-                            if not cover_bytes and itunes_data.get('cover_bytes'):
-                                cover_bytes = itunes_data['cover_bytes']
-                            thumbnail = None
-                            if cover_bytes:
-                                if len(cover_bytes) > 200 * 1024:
-                                    logger.info(f"Обложка слишком большая ({len(cover_bytes)} байт), сжимаю.")
-                                    compressed = compress_cover(cover_bytes, max_size_bytes=200*1024)
-                                    if compressed:
-                                        thumbnail = compressed
-                                        logger.info(f"Обложка сжата: {len(cover_bytes)} -> {len(compressed)} байт.")
-                                else:
-                                    thumbnail = cover_bytes
-
+                            # Отправка
                             if file_size_mb > 49.0:
                                 uploaded = False
                                 if status_msg:
@@ -1456,7 +1488,6 @@ async def worker_loop(app):
                                         await app.bot.send_message(chat_id=chat_id, text=f"❌ Не удалось отправить {display_name}: {e2}")
 
                             add_stats(f_path.stat().st_size)
-
                             await asyncio.sleep(TRACK_DELAY_SECONDS)
                             gc.collect()
 
