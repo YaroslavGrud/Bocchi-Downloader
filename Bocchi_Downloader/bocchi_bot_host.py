@@ -920,9 +920,12 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                 tracks_info = await asyncio.to_thread(client.tracks, [content_id])
                 if tracks_info and len(tracks_info) > 0:
                     t = tracks_info[0]
-                    # Сбор всех исполнителей через запятую
                     artist = ', '.join([a.name for a in t.artists]) if t.artists else "Неизвестен"
                     title = t.title
+                    # Добавляем версию из полей version или subtitle
+                    version_info = getattr(t, 'version', None) or getattr(t, 'subtitle', None)
+                    if version_info:
+                        title = f"{title} ({version_info})"
                     track_name = f"{artist} — {title}"
                     cover_uri = t.cover_uri
                     cover_bytes = await fetch_cover_from_yandex(cover_uri) if cover_uri else None
@@ -964,6 +967,9 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                             continue
                         artist = ', '.join([a.get('name', 'Неизвестен') for a in track.get('artists', [])]) or "Неизвестен"
                         title = track.get('title', 'Неизвестный трек')
+                        version_info = track.get('version') or track.get('subtitle')
+                        if version_info:
+                            title = f"{title} ({version_info})"
                         track_cover_uri = track.get('cover_uri')
                         cover_bytes = await fetch_cover_from_yandex(track_cover_uri) if track_cover_uri else album_cover_bytes
                         track_list.append({
@@ -1036,6 +1042,9 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                     track_id = track.get('id')
                     artist = ', '.join([a.get('name', 'Неизвестен') for a in track.get('artists', [])]) or "Неизвестен"
                     title = track.get('title', 'Неизвестный трек')
+                    version_info = track.get('version') or track.get('subtitle')
+                    if version_info:
+                        title = f"{title} ({version_info})"
                     cover_uri = track.get('cover_uri')
                     cover_bytes = await fetch_cover_from_yandex(cover_uri) if cover_uri else None
                     album_info = track.get('albums', [{}])[0] if track.get('albums') else {}
