@@ -63,6 +63,7 @@ printf '\033[1;36m🚀 Bocchi Downloader — восстановление\033[0m
 ```
 
 После короткого процесса распаковки автоматически запустится Bocchi Downloader.  
+Загруженные файлы сохраняются в `/sdcard/Download/BocchiDownloads`
 
 ---
 
