@@ -60,17 +60,7 @@ termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install python ff
 ```bash
 bocchi_env/bin/python bocchi_bot_android.py
 ```
-В режиме CLI
-```bash
-termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install python ffmpeg git binutils wget -y && pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip && python -m venv bocchi_env && bocchi_env/bin/pip install setuptools wheel && bocchi_env/bin/pip install aiohttp mutagen yandex-music colorama && wget -O bocchi_bot_CLI.py https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_CLI.py && bocchi_env/bin/python bocchi_bot_CLI.py
-
-```
-Для последующих запусков (после установки)
-
-```bash
-cd ~ && bocchi_env/bin/python bocchi_bot_CLI.py
-```
-
+[Инструкция для CLI](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/ReadmeCLI.md)
 
 ## 🎮 Использование
 
