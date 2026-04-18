@@ -436,32 +436,18 @@ async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===================== ХЕНДЛЕРЫ АВТОРИЗАЦИИ =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Всегда показывает приветствие с кнопкой 'Начать работу'."""
     if is_message_too_old(update):
         return WAITING_FOR_LINK
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-
-    queue_size = download_queue.qsize()
-    if queue_size > 0:
-        await update.message.reply_text(
-            f"🔄 Я ещё загружаю… В очереди {queue_size} треков. Используй /menu для управления."
-        )
-        return WAITING_FOR_LINK
 
     lock = user_locks.get(user_id)
     if lock is None:
         lock = asyncio.Lock()
         user_locks[user_id] = lock
     async with lock:
-        if is_token_valid(context):
-            await show_main_menu(update, context)
-            return WAITING_FOR_LINK
-        last_welcome = context.user_data.get('last_welcome_time', 0)
-        if time.time() - last_welcome < 5:
-            logger.info(f"Игнорируем частый /start от {user_id}")
-            return WAITING_FOR_LINK
-        context.user_data['last_welcome_time'] = time.time()
-        last_auth_warning.pop(user_id, None)
+        # Всегда показываем приветствие, даже если токен уже есть
         kb = [[KeyboardButton("🎵 Начать работу")]]
         welcome = (
             "🌸 Привет! Я Боччи… То есть Bocchi Downloader 🎸\n\n"
@@ -491,6 +477,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_FOR_LINK
 
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки «Начать работу»: проверяет токен и переходит в меню или запрашивает токен."""
     if is_message_too_old(update):
         return WAITING_FOR_LINK
     user_id = update.effective_user.id
@@ -500,8 +487,14 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_locks[user_id] = lock
     async with lock:
         if is_token_valid(context):
-            await show_main_menu(update, context)
+            # Токен уже есть и валиден
+            await send_animated_message(
+                context.bot, update.effective_chat.id,
+                "✅ Токен уже активен! Возвращаюсь в главное меню.",
+                reply_markup=main_markup
+            )
             return WAITING_FOR_LINK
+        # Нет токена или истёк — показываем инструкцию
         last_request = context.user_data.get('last_auth_request_time', 0)
         if time.time() - last_request < 5:
             logger.info(f"Игнорируем частый запрос токена от {user_id}")
@@ -789,9 +782,18 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         last = last_auth_warning.get(user_id, 0)
         if now - last > WARNING_COOLDOWN:
             last_auth_warning[user_id] = now
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="🔑 Токен не активен… Нажми /start или «Начать работу»."
+            # Отправляем полную инструкцию вместо короткого предупреждения
+            auth_text = (
+                "🔑 Авторизация\n\n"
+                "1️⃣ Перейди по [ссылке](https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d)\n"
+                "2️⃣ Нажми «Войти» или «Разрешить».\n"
+                "3️⃣ Страница может стать пустой — это нормально!\n"
+                "4️⃣ Скопируй весь адрес из строки браузера и отправь мне."
+            )
+            await send_animated_message(
+                context.bot, chat_id,
+                auth_text,
+                parse_mode="Markdown", disable_web_page_preview=True
             )
         return WAITING_FOR_TOKEN
 
