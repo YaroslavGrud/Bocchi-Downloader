@@ -1,4 +1,4 @@
-﻿aiohttp==3.13.3
+aiohttp==3.13.3
 aiosignal==1.4.0
 APScheduler==3.11.2
 attrs==25.4.0
@@ -8,7 +8,7 @@ frozenlist==1.8.0
 idna==3.11
 multidict==6.7.1
 mutagen==1.47.0
-pillow==12.1.1
+pillow==12.2.0
 propcache==0.4.1
 psutil==7.2.2
 python-dotenv==1.0.0
