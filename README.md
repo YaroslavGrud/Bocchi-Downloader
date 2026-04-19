@@ -53,7 +53,7 @@ yandex-music-downloader --help
 ```
 ## 🤖 Установка под Android
 ```bash
-termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install python ffmpeg git binutils wget -y && pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip && python -m venv bocchi_env && bocchi_env/bin/pip install setuptools wheel && bocchi_env/bin/pip install python-telegram-bot[job-queue] catboxpy mutagen requests python-dotenv yandex-music && wget -O bocchi_bot_android.py https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py && read -p "Введите токен Telegram бота: " TOKEN && echo "TELEGRAM_TOKEN=$TOKEN" > .env && bocchi_env/bin/python bocchi_bot_android.py
+termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install python ffmpeg git binutils wget -y && pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip && python -m venv bocchi_env && bocchi_env/bin/pip install setuptools wheel && bocchi_env/bin/pip install python-telegram-bot[job-queue] catboxpy mutagen requests python-dotenv yandex-music && wget -O bocchi_bot_android.py https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py && read -p "Введите токен Telegram бота: " TOKEN && echo "TELEGRAM_TOKEN=$TOKEN" > .env.example && bocchi_env/bin/python bocchi_bot_android.py
 ```
 
 Для последующих запусков (после установки)
@@ -96,9 +96,8 @@ bocchi_env/bin/python bocchi_bot_android.py
 
 - **Одиночные треки** → загружаются как есть
 - **Альбомы** → автоматически разбиваются на отдельные треки
-- **Плейлисты** → Не поддерживается из-за ограничений API Яндекса
-> Предположительное решение найдено в https://github.com/llistochek/yandex-music-downloader/issues/120 и https://github.com/llistochek/yandex-music-downloader/issues/132
-> но оно не работает из-за появления `sys.exit`
+- **Плейлисты** → автоматически разбиваются на отдельные треки (Спасибо [MarshalX](https://github.com/MarshalX))
+
 
 ### Формат вывода
 
@@ -134,7 +133,8 @@ bocchi_env/bin/python bocchi_bot_android.py
 ## 📝 Лицензия
 Проект распространяется под лицензией MIT. Подробности в файле [LICENSE](LICENSE).
 ## 🙏 Благодарности
-- [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) — отличный загрузчик для Яндекс.Музыки
+- [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) — загрузчик для Яндекс.Музыки (оставлен для совместимости)
+- [MarshalX](https://github.com/MarshalX) - обновлённый API и поддержку плейлистов
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) — мощная библиотека для Telegram ботов
 - [catboxpy](https://github.com/anshonweb/catboxpy) — обёртка для Catbox/Litterbox
 - [Bothost](https://bothost.ru/) в предоставлении хостинг услуг

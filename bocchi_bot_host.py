@@ -35,14 +35,8 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, ConversationHandler, filters
 )
-from yandex_music import Client
+from yandex_music import ClientAsync
 from PIL import Image
-
-# ========== НАСТРОЙКА ПУТЕЙ ДЛЯ ДАННЫХ ==========
-DATA_DIR = os.getenv("DATA_DIR", "/app/data")
-os.makedirs(DATA_DIR, exist_ok=True)
-TEMP_DIR = os.path.join(DATA_DIR, "temp")
-os.makedirs(TEMP_DIR, exist_ok=True)
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 load_dotenv()
@@ -53,7 +47,7 @@ logger = logging.getLogger("BocchiStation")
 # --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
 DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")
-STATS_FILE = os.getenv("STATS_FILE", os.path.join(DATA_DIR, "stats.txt"))
+STATS_FILE = os.getenv("STATS_FILE", "../stats.txt")
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
@@ -63,12 +57,10 @@ MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))
 TRACK_DELAY_SECONDS = float(os.getenv("TRACK_DELAY_SECONDS", "5.0"))
 STUCK_TIMEOUT = int(os.getenv("STUCK_TIMEOUT", "120"))
 ACCUMULATION_DELAY = float(os.getenv("ACCUMULATION_DELAY", "5.0"))
-
-# Файлы состояния – теперь внутри DATA_DIR
-QUEUE_STATE_FILE = os.path.join(DATA_DIR, "download_queue_state.json")
-USER_TOKENS_FILE = os.path.join(DATA_DIR, "user_tokens.json")
-ACTIVE_MSGS_FILE = os.path.join(DATA_DIR, "active_status_msgs.json")
-PENDING_TASKS_FILE = os.path.join(DATA_DIR, "pending_tasks.json")
+QUEUE_STATE_FILE = "download_queue_state.json"
+USER_TOKENS_FILE = "user_tokens.json"
+ACTIVE_MSGS_FILE = "active_status_msgs.json"
+PENDING_TASKS_FILE = "pending_tasks.json"
 
 BOT_START_TIME = time.time()
 
@@ -83,6 +75,7 @@ active_tasks_count = 0
 last_auth_warning = {}
 WARNING_COOLDOWN = 60
 worker_task = None
+token_checker_task = None
 last_processed_msg = {}
 user_locks = {}
 user_tokens = {}
@@ -120,12 +113,21 @@ def load_user_tokens():
         return
     try:
         with open(USER_TOKENS_FILE, 'r', encoding='utf-8') as f:
-            loaded = json.load(f)
+            content = f.read().strip()
+            if not content:
+                logger.warning("Файл токенов пуст, создаю новый")
+                return
+            loaded = json.loads(content)
         now = time.time()
         for uid, data in loaded.items():
             if now - data.get('timestamp', 0) <= TOKEN_LIFETIME:
                 user_tokens[uid] = data
         logger.info(f"Загружено {len(user_tokens)} действующих токенов")
+    except json.JSONDecodeError as e:
+        logger.error(f"Ошибка загрузки токенов (некорректный JSON): {e}")
+        corrupted = f"{USER_TOKENS_FILE}.corrupted_{int(time.time())}"
+        os.rename(USER_TOKENS_FILE, corrupted)
+        logger.warning(f"Повреждённый файл переименован в {corrupted}")
     except Exception as e:
         logger.error(f"Ошибка загрузки токенов: {e}")
 
@@ -229,7 +231,6 @@ def get_plural_tracks(n):
 
 # ===================== РАБОТА С ОБЛОЖКАМИ =====================
 async def fetch_cover_from_yandex(cover_uri: str) -> bytes | None:
-    """Загружает обложку по cover_uri из API Яндекс.Музыки."""
     if not cover_uri:
         return None
     try:
@@ -243,7 +244,6 @@ async def fetch_cover_from_yandex(cover_uri: str) -> bytes | None:
     return None
 
 def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> bytes | None:
-    """Сжимает изображение обложки до заданного размера."""
     if not cover_bytes or len(cover_bytes) <= max_size_bytes:
         return cover_bytes
     try:
@@ -254,7 +254,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
             output = io.BytesIO()
             img.save(output, format='JPEG', quality=quality, optimize=True)
             if output.tell() <= max_size_bytes:
-                logger.info(f"Обложка сжата качеством {quality}: {len(cover_bytes)} -> {output.tell()} байт")
                 return output.getvalue()
         for scale in [0.75, 0.5, 0.3, 0.2, 0.15]:
             new_size = (int(img.width * scale), int(img.height * scale))
@@ -264,7 +263,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
             output = io.BytesIO()
             resized.save(output, format='JPEG', quality=75, optimize=True)
             if output.tell() <= max_size_bytes:
-                logger.info(f"Обложка сжата уменьшением до {new_size}: {len(cover_bytes)} -> {output.tell()} байт")
                 return output.getvalue()
         for scale in [0.1, 0.08]:
             new_size = (int(img.width * scale), int(img.height * scale))
@@ -274,7 +272,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
             output = io.BytesIO()
             resized.save(output, format='JPEG', quality=30, optimize=True)
             if output.tell() <= max_size_bytes:
-                logger.info(f"Обложка сжата экстремально: {len(cover_bytes)} -> {output.tell()} байт")
                 return output.getvalue()
         logger.error(f"Не удалось сжать обложку: исходный размер {len(cover_bytes)} байт")
         return None
@@ -283,7 +280,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
         return None
 
 def extract_cover_from_audio(file_path: Path) -> bytes | None:
-    """Извлекает встроенную обложку из аудиофайла."""
     try:
         audio = File(file_path)
         if audio is None:
@@ -329,7 +325,7 @@ def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
 
 def cleanup_old_tmp_dirs():
     count = 0
-    for tmp_dir in Path(TEMP_DIR).glob('bocchi_tmp_*'):
+    for tmp_dir in Path('.').glob('bocchi_tmp_*'):
         if tmp_dir.is_dir():
             shutil.rmtree(tmp_dir, ignore_errors=True)
             count += 1
@@ -366,10 +362,14 @@ def extract_base_url(url: str) -> str:
     return "https://music.yandex.ru"
 
 def parse_yandex_url(url: str):
-    """Улучшенный парсинг ссылок Яндекс.Музыки."""
+    """Улучшенный парсинг ссылок Яндекс.Музыки, включая iframe и UUID плейлистов."""
     parsed = urlparse(url)
     path = parsed.path
     query = parse_qs(parsed.query)
+
+    iframe_match = re.search(r'/iframe/playlist/([^/]+)/(\d+)', path)
+    if iframe_match:
+        return ('iframe_playlist', iframe_match.group(2), iframe_match.group(1))
 
     track_match = re.search(r'/track/(\d+)', path)
     if track_match:
@@ -382,13 +382,14 @@ def parse_yandex_url(url: str):
     playlist_match = re.search(r'/users/([^/]+)/playlists/(\d+)', path)
     if playlist_match:
         return ('playlist', playlist_match.group(2), playlist_match.group(1))
+
     playlist_match2 = re.search(r'/playlist/(\d+)', path)
     if playlist_match2:
         return ('playlist', playlist_match2.group(1), None)
 
     playlist_uuid_match = re.search(r'/playlists/([a-z0-9\-\.]+)', path)
     if playlist_uuid_match:
-        return ('playlist', playlist_uuid_match.group(1), None)
+        return ('uuid_playlist', playlist_uuid_match.group(1), None)
 
     if 'handlers/playlist.jsx' in path:
         owner = query.get('owner', [None])[0]
@@ -444,7 +445,6 @@ async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===================== ХЕНДЛЕРЫ АВТОРИЗАЦИИ =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Всегда показывает приветствие с кнопкой 'Начать работу'."""
     if is_message_too_old(update):
         return WAITING_FOR_LINK
     user_id = update.effective_user.id
@@ -484,7 +484,6 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_FOR_LINK
 
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик кнопки «Начать работу»: проверяет токен и переходит в меню или запрашивает токен."""
     if is_message_too_old(update):
         return WAITING_FOR_LINK
     user_id = update.effective_user.id
@@ -545,20 +544,47 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
     status_msg = await update.message.reply_text("🔍 Проверяю токен…")
+
+    # Попытка 1: через ClientAsync
     try:
-        client = await asyncio.to_thread(Client(token).init)
+        client = ClientAsync(token)
+        await client.init()
+        account_status = await client.account_status()
+        if not account_status or not account_status.account:
+            raise Exception("Не удалось получить данные аккаунта через ClientAsync")
+        login = account_status.account.login
         set_user_token(user_id, token)
         context.user_data['yandex_token'] = token
         context.user_data['token_time'] = time.time()
         last_auth_warning.pop(user_id, None)
-        login = client.account_status().account.login
         await status_msg.edit_text(f"✅ Ура! Я узнала тебя, {login}! Теперь всё готово.")
         await show_main_menu(update, context)
         return WAITING_FOR_LINK
     except Exception as e:
-        logger.error(f"Ошибка токена: {e}")
-        await status_msg.edit_text("❌ Токен не подходит… Попробуй ещё раз.")
-        return WAITING_FOR_TOKEN
+        logger.warning(f"ClientAsync не сработал: {type(e).__name__}: {e}")
+
+    # Попытка 2: прямой HTTP-запрос
+    try:
+        headers = {"Authorization": f"OAuth {token}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get("https://api.music.yandex.net/account/status", headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    login = data.get("result", {}).get("account", {}).get("login")
+                    if login:
+                        set_user_token(user_id, token)
+                        context.user_data['yandex_token'] = token
+                        context.user_data['token_time'] = time.time()
+                        last_auth_warning.pop(user_id, None)
+                        await status_msg.edit_text(f"✅ Ура! Я узнала тебя, {login}! Теперь всё готово.")
+                        await show_main_menu(update, context)
+                        return WAITING_FOR_LINK
+                logger.warning(f"HTTP-проверка вернула статус {resp.status}")
+    except Exception as e2:
+        logger.error(f"Ошибка HTTP-проверки: {type(e2).__name__}: {e2}")
+
+    await status_msg.edit_text("❌ Токен не подходит… Попробуй ещё раз.")
+    return WAITING_FOR_TOKEN
 
 async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
@@ -771,6 +797,25 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message = update.message
 
+    # Попытка извлечь ссылку из HTML-кода
+    if 'iframe' in text and 'music.yandex' in text:
+        src_match = re.search(r'src="(https?://music\.yandex\.[a-z]{2,3}/[^"]+)"', text, re.IGNORECASE)
+        if src_match:
+            src_url = src_match.group(1)
+            logger.info(f"Извлечена ссылка из HTML: {src_url}")
+            text = src_url
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🔍 Нашла в коде ссылку на плейлист. Продолжаю обработку...",
+                reply_to_message_id=message.message_id
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Не удалось найти ссылку в HTML-коде. Убедитесь, что вы скопировали код полностью."
+            )
+            return WAITING_FOR_LINK
+
     pending = get_pending_tasks(chat_id)
     if pending:
         await context.bot.send_message(chat_id, f"🔄 Нашла отложенные задачи ({len(pending)} треков). Продолжаю загрузку…")
@@ -801,8 +846,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return WAITING_FOR_TOKEN
 
-    # УЛУЧШЕННЫЙ ПОИСК ССЫЛОК (гибкое регулярное выражение)
-    content = (update.message.text or "") + " " + (update.message.caption or "")
+    content = text + " " + (update.message.caption or "")
     url_pattern = re.compile(r'https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?(?:/[^\s]+)?', re.IGNORECASE)
     urls = url_pattern.findall(content)
     valid_urls = []
@@ -811,6 +855,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parsed = parse_yandex_url(u)
         if parsed[0] is not None:
             valid_urls.append(u)
+
     if not valid_urls:
         await context.bot.send_message(
             chat_id=chat_id,
@@ -894,21 +939,18 @@ async def process_accumulated_links(user_id, chat_id, context, token):
 
     logger.info(f"Ссылки от {user_id}: {raw_links}")
 
-    async def yandex_api_request(endpoint):
-        headers = {"Authorization": f"OAuth {token}"}
-        async with aiohttp.ClientSession() as session:
-            async with session.get(endpoint, headers=headers) as resp:
-                return resp.status, await resp.json() if resp.status == 200 else None
-
     try:
-        client = await asyncio.to_thread(Client, token)
-        client = await asyncio.to_thread(client.init)
+        client = ClientAsync(token)
+        await client.init()
     except Exception as e:
         logger.error(f"Ошибка создания клиента: {e}")
         await context.bot.send_message(chat_id, "❌ Ошибка авторизации. Попробуй снова.")
         return
 
     all_tracks = []
+    first_type = None
+    batch_info = {}
+
     for url in raw_links:
         base_url = extract_base_url(url)
         content_type, content_id, username = parse_yandex_url(url)
@@ -919,12 +961,12 @@ async def process_accumulated_links(user_id, chat_id, context, token):
 
         try:
             if content_type == 'track':
-                tracks_info = await asyncio.to_thread(client.tracks, [content_id])
+                tracks_info = await client.tracks([content_id])
                 if tracks_info and len(tracks_info) > 0:
                     t = tracks_info[0]
                     artist = ', '.join([a.name for a in t.artists]) if t.artists else "Неизвестен"
                     title = t.title
-                    version_info = getattr(t, 'version', None) or getattr(t, 'subtitle', None)
+                    version_info = t.version
                     if version_info:
                         title = f"{title} ({version_info})"
                     track_name = f"{artist} — {title}"
@@ -942,116 +984,108 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                         'cover_bytes': cover_bytes,
                         'album': album_name,
                         'year': year,
-                        'genre': genre
+                        'genre': genre,
+                        'batch_type': None,
+                        'batch_name': None,
+                        'batch_artist': None,
+                        'batch_owner': None,
+                        'batch_total': 1,
+                        'batch_index': 1
                     })
                 else:
                     await context.bot.send_message(chat_id, f"❌ Трек не найден: {url}")
 
             elif content_type == 'album':
-                api_url = f"https://api.music.yandex.net/albums/{content_id}/with-tracks"
-                status, data = await yandex_api_request(api_url)
-                if status != 200 or not data or 'result' not in data:
+                album = await client.albums_with_tracks(content_id)
+                if not album or not album.volumes:
                     await context.bot.send_message(chat_id, f"❌ Альбом не найден: {url}")
                     continue
-                album_data = data['result']
-                album_title = album_data.get('title', 'Неизвестный альбом')
-                album_cover_uri = album_data.get('cover_uri')
-                album_cover_bytes = await fetch_cover_from_yandex(album_cover_uri) if album_cover_uri else None
-                album_year = album_data.get('year')
-                album_genre = album_data.get('genre')
-                volumes = album_data.get('volumes', [])
+                album_title = album.title or "Неизвестный альбом"
+                album_artist = ', '.join([a.name for a in album.artists]) if album.artists else 'Разные исполнители'
+                cover_uri = album.cover_uri
+                album_cover_bytes = await fetch_cover_from_yandex(cover_uri) if cover_uri else None
+                year = album.year
+                genre = album.genre
                 track_list = []
-                for volume in volumes:
+                for volume in album.volumes:
                     for track in volume:
-                        track_id = track.get('id')
-                        if not track_id:
+                        if not track:
                             continue
-                        artist = ', '.join([a.get('name', 'Неизвестен') for a in track.get('artists', [])]) or "Неизвестен"
-                        title = track.get('title', 'Неизвестный трек')
-                        version_info = track.get('version') or track.get('subtitle')
+                        artist = ', '.join([a.name for a in track.artists]) if track.artists else "Неизвестен"
+                        title = track.title
+                        version_info = track.version
                         if version_info:
                             title = f"{title} ({version_info})"
-                        track_cover_uri = track.get('cover_uri')
+                        track_cover_uri = track.cover_uri
                         cover_bytes = await fetch_cover_from_yandex(track_cover_uri) if track_cover_uri else album_cover_bytes
                         track_list.append({
-                            'url': f"{base_url}/track/{track_id}",
+                            'url': f"{base_url}/track/{track.id}",
                             'artist': artist,
                             'title': title,
-                            'duration': track.get('duration_ms', 0) // 1000,
+                            'duration': track.duration_ms // 1000 if track.duration_ms else 0,
                             'track_name': f"{artist} — {title}",
                             'cover_bytes': cover_bytes,
                             'album': album_title,
-                            'year': album_year,
-                            'genre': album_genre
+                            'year': year,
+                            'genre': genre
                         })
                 if not track_list:
                     await context.bot.send_message(chat_id, f"❌ Альбом пуст: {url}")
                     continue
+                for idx, t in enumerate(track_list, 1):
+                    t.update({
+                        'batch_type': 'album',
+                        'batch_name': album_title,
+                        'batch_artist': album_artist,
+                        'batch_total': len(track_list),
+                        'batch_index': idx
+                    })
                 all_tracks.extend(track_list)
+                first_type = 'album'
+                batch_info = {'name': album_title, 'artist': album_artist}
 
-            elif content_type == 'playlist':
-                content_id_str = str(content_id)
-                if content_id_str.startswith(('ps.', 'lk.', 'pl.')):
-                    await context.bot.send_message(
-                        chat_id,
-                        f"⚠️ Плейлист «{content_id_str}» — персональная подборка Яндекса, я не могу получить треки. Создай обычный плейлист и добавь туда нужные песни вручную."
-                    )
-                    continue
-
-                endpoints = [
-                    f"https://api.music.yandex.net/playlists/{content_id_str}",
-                    f"https://api.music.yandex.net/playlists/{content_id_str}?with-tracks=true",
-                ]
-                if username:
-                    endpoints.append(f"https://api.music.yandex.net/users/{username}/playlists/{content_id}?with-tracks=true")
-
-                success = False
-                playlist_data = None
-                for api_url in endpoints:
-                    status, data = await yandex_api_request(api_url)
-                    logger.info(f"Плейлист API статус {status} для {api_url}")
-                    if status == 200 and data and 'result' in data:
-                        playlist_data = data['result']
-                        if 'playlist' in playlist_data:
-                            playlist_data = playlist_data['playlist']
-                        owner = playlist_data.get('owner', {})
-                        owner_login = owner.get('login', '')
-                        if owner_login in ('yamusic', 'yandex', 'music.yandex'):
-                            await context.bot.send_message(
-                                chat_id,
-                                f"⚠️ Плейлист «{playlist_data.get('title', '')}» служебный, его треки недоступны."
-                            )
-                            success = False
-                            break
-                        success = True
-                        break
-                    elif status == 403:
-                        await context.bot.send_message(chat_id, f"🔒 Плейлист приватный: {url}")
-                        break
-                if not success:
-                    if status != 403:
-                        await context.bot.send_message(chat_id, f"❌ Плейлист не найден или недоступен: {url}")
-                    continue
+            elif content_type in ('playlist', 'uuid_playlist', 'iframe_playlist'):
+                # Прямой HTTP-запрос к API для надёжной работы с UUID
+                headers = {"Authorization": f"OAuth {token}"}
+                api_url = f"https://api.music.yandex.net/playlist/{content_id}"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(api_url, headers=headers) as resp:
+                        if resp.status != 200:
+                            await context.bot.send_message(chat_id, f"❌ Не удалось загрузить плейлист. Возможно, он приватный или удалён.")
+                            continue
+                        data = await resp.json()
+                        playlist_data = data.get("result")
+                        if not playlist_data:
+                            await context.bot.send_message(chat_id, f"❌ Плейлист пуст или недоступен: {url}")
+                            continue
 
                 playlist_title = playlist_data.get('title', 'Неизвестный плейлист')
-                tracks_data = playlist_data.get('tracks', [])
+                owner = playlist_data.get('owner', {})
+                owner_name = owner.get('name') or owner.get('login') or 'Неизвестный пользователь'
+
                 track_list = []
-                for item in tracks_data:
+                for item in playlist_data.get('tracks', []):
                     track = item.get('track')
                     if not track:
                         continue
                     track_id = track.get('id')
+                    if not track_id:
+                        continue
+
                     artist = ', '.join([a.get('name', 'Неизвестен') for a in track.get('artists', [])]) or "Неизвестен"
                     title = track.get('title', 'Неизвестный трек')
                     version_info = track.get('version') or track.get('subtitle')
                     if version_info:
                         title = f"{title} ({version_info})"
+
                     cover_uri = track.get('cover_uri')
                     cover_bytes = await fetch_cover_from_yandex(cover_uri) if cover_uri else None
+
                     album_info = track.get('albums', [{}])[0] if track.get('albums') else {}
                     album_name = album_info.get('title')
                     year = album_info.get('year')
                     genre = album_info.get('genre')
+
                     track_list.append({
                         'url': f"{base_url}/track/{track_id}",
                         'artist': artist,
@@ -1063,10 +1097,22 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                         'year': year,
                         'genre': genre
                     })
+
                 if not track_list:
-                    await context.bot.send_message(chat_id, f"❌ Плейлист пуст: {url}")
+                    await context.bot.send_message(chat_id, f"❌ Не удалось загрузить ни одного трека из плейлиста: {url}")
                     continue
+
+                for idx, t in enumerate(track_list, 1):
+                    t.update({
+                        'batch_type': 'playlist',
+                        'batch_name': playlist_title,
+                        'batch_owner': owner_name,
+                        'batch_total': len(track_list),
+                        'batch_index': idx
+                    })
                 all_tracks.extend(track_list)
+                first_type = 'playlist'
+                batch_info = {'name': playlist_title, 'owner': owner_name}
 
         except Exception as e:
             logger.error(f"Ошибка парсинга {url}: {e}")
@@ -1076,14 +1122,25 @@ async def process_accumulated_links(user_id, chat_id, context, token):
         await context.bot.send_message(chat_id, "❌ Не удалось найти треки по ссылкам.")
         return
 
+    batch_types = set(t.get('batch_type') for t in all_tracks)
+    if len(batch_types) == 1 and None not in batch_types:
+        first_type = next(iter(batch_types))
+
     total_tracks = len(all_tracks)
     current_queue_size = download_queue.qsize()
     batch_id = f"{user_id}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
 
+    if first_type == 'album':
+        content_desc = f"альбом «{batch_info.get('name', 'Неизвестный альбом')}»"
+    elif first_type == 'playlist':
+        content_desc = f"плейлист «{batch_info.get('name', 'Неизвестный плейлист')}»"
+    else:
+        content_desc = "треки"
+
     queue_pos = current_queue_size + 1
     await context.bot.send_message(
         chat_id,
-        f"📥 Ух ты, получилось найти {get_plural_tracks(total_tracks)}! "
+        f"📥 Я получила {get_plural_tracks(total_tracks)} из {content_desc}. "
         f"Твоя очередь — номер {queue_pos}… Я постараюсь всё скачать аккуратно, "
         f"пожалуйста, не сердись, если что-то пойдёт не так…"
     )
@@ -1099,8 +1156,12 @@ async def process_accumulated_links(user_id, chat_id, context, token):
             'track_name': track_info['track_name'],
             'quality': get_user_quality(context),
             'batch_id': batch_id,
-            'batch_index': idx + 1,
-            'batch_total': total_tracks,
+            'batch_index': track_info.get('batch_index', idx+1),
+            'batch_total': track_info.get('batch_total', total_tracks),
+            'batch_type': track_info.get('batch_type'),
+            'batch_name': track_info.get('batch_name'),
+            'batch_artist': track_info.get('batch_artist'),
+            'batch_owner': track_info.get('batch_owner'),
             'user_id': user_id,
             'cover_bytes': track_info.get('cover_bytes'),
             'album': track_info.get('album'),
@@ -1177,8 +1238,7 @@ async def worker_loop(app):
             while True:
                 task = await download_queue.get()
                 worker_busy = True
-                # Используем TEMP_DIR для временных папок
-                tmp_dir = Path(TEMP_DIR) / f"bocchi_tmp_{uuid.uuid4().hex}"
+                tmp_dir = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
                 current_quality = task.get('quality', DEFAULT_QUALITY)
                 actual_quality_used = None
                 task_id = f"{task.get('batch_id')}_{task.get('batch_index')}"
@@ -1206,9 +1266,33 @@ async def worker_loop(app):
                         keyboard = InlineKeyboardMarkup([
                             [InlineKeyboardButton("❌ Отменить загрузку", callback_data="cancel_download")]
                         ])
+
+                        batch_type = task.get('batch_type')
+                        batch_name = task.get('batch_name')
+                        batch_artist = task.get('batch_artist')
+                        batch_owner = task.get('batch_owner')
+                        batch_index = task.get('batch_index', 1)
+                        batch_total = task.get('batch_total', 1)
+
+                        if batch_type == 'album':
+                            header = f"📀 Альбом: {batch_name}\n🎤 {batch_artist}\n"
+                        elif batch_type == 'playlist':
+                            header = f"📋 Плейлист: {batch_name}\n👤 {batch_owner}\n"
+                        elif batch_total > 1:
+                            header = f"📦 Пакет треков ({batch_total} шт.)\n"
+                        else:
+                            header = ""
+
+                        progress = f"({batch_index} из {batch_total})" if batch_total > 1 else ""
+                        status_text = (
+                            f"🌀 Обрабатываю… {progress}\n"
+                            f"{header}"
+                            f"🎵 Трек: {task['track_name']}\n"
+                            f"⚙️ Качество: {QUALITY_NAMES[current_quality]}"
+                        )
                         status_msg = await app.bot.send_message(
                             chat_id=chat_id,
-                            text=f"🌀 Обрабатываю…\n{task['track_name']}\nКачество: {QUALITY_NAMES[current_quality]}",
+                            text=status_text,
                             reply_markup=keyboard
                         )
                         active_status_msgs[task_id] = {"chat_id": chat_id, "message_id": status_msg.message_id}
@@ -1228,10 +1312,18 @@ async def worker_loop(app):
                         async def run_downloader(quality, tmp_dir_path):
                             nonlocal downloader_process
                             cmd = [
-                                DOWNLOADER_PATH, "--token", task['token'], "--quality", str(quality),
-                                "--embed-cover", "--cover-resolution", "original",
-                                "--dir", str(tmp_dir_path), "--url", task['url'],
-                                "--path-pattern", "#artist - #title", "--lyrics-format", "lrc"
+                                DOWNLOADER_PATH,
+                                "--token", task['token'],
+                                "--quality", str(quality),
+                                "--embed-cover",
+                                "--cover-resolution", "original",
+                                "--lyrics-format", "lrc",
+                                "--dir", str(tmp_dir_path),
+                                "--url", task['url'],
+                                "--path-pattern", "#artist - #title",
+                                "--delay", "3",
+                                "--skip-existing",
+                                "--only-music"
                             ]
                             proc = await asyncio.create_subprocess_exec(
                                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -1565,6 +1657,14 @@ async def worker_loop(app):
                             batch_total = task.get('batch_total')
                             batch_index = task.get('batch_index')
                             if batch_total and batch_index == batch_total:
+                                batch_type = task.get('batch_type')
+                                batch_name = task.get('batch_name')
+                                if batch_type == 'album':
+                                    finish_text = f"🎸 Альбом «{batch_name}» полностью загружен!"
+                                elif batch_type == 'playlist':
+                                    finish_text = "🎸 Плейлист полностью загружен!"
+                                else:
+                                    finish_text = "🎸 Всё! Я смогла обработать все треки."
                                 try:
                                     await app.bot.send_message(
                                         chat_id=chat_id,
@@ -1573,7 +1673,7 @@ async def worker_loop(app):
                                     )
                                     await app.bot.send_message(
                                         chat_id=chat_id,
-                                        text="🎸 Всё! Я смогла обработать все треки. Выбери, что делать дальше:",
+                                        text=f"{finish_text}\nВыбери, что делать дальше:",
                                         reply_markup=main_markup
                                     )
                                 except Exception as e:
@@ -1627,7 +1727,7 @@ async def check_all_tokens(app):
 
 # --- ЗАПУСК ---
 async def post_init(app):
-    global download_semaphore, download_queue, worker_task
+    global download_semaphore, download_queue, worker_task, token_checker_task
     download_semaphore = asyncio.Semaphore(1)
     download_queue = asyncio.Queue()
     load_user_tokens()
@@ -1636,9 +1736,16 @@ async def post_init(app):
     load_queue_state()
     await cleanup_orphan_messages(app)
     worker_task = asyncio.create_task(worker_loop(app))
-    app.job_queue.run_repeating(lambda _: asyncio.create_task(check_all_tokens(app)), interval=900, first=10)
+
+    async def periodic_token_check():
+        while True:
+            await asyncio.sleep(900)
+            await check_all_tokens(app)
+
+    token_checker_task = asyncio.create_task(periodic_token_check())
 
 def main():
+    global worker_task, token_checker_task
     try:
         cleanup_old_tmp_dirs()
         if not os.path.exists(STATS_FILE):
@@ -1664,6 +1771,11 @@ def main():
         app.run_polling()
     except KeyboardInterrupt:
         logger.info("Бот остановлен")
+    finally:
+        if token_checker_task:
+            token_checker_task.cancel()
+        if worker_task:
+            worker_task.cancel()
 
 if __name__ == "__main__":
     main()
