@@ -6,6 +6,11 @@
 > Некоторые функции могут работать нестабильно, возможны ошибки. Если вы столкнулись с проблемой, пожалуйста, сообщите о ней в [Issues](https://github.com/YaroslavGrud/Bocchi-Downloader/issues). Спасибо за ваше терпение и помощь в улучшении проекта!
 > 
 > Бот может потребовать наличие Telegram Premium разработчика для работы некоторых функций
+>
+> Основная разработка идёт в `bocchi_bot_host.py`.
+> 
+> Остальные версии проекта оставлены в качестве ознакомления
+
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -51,6 +56,15 @@ pip install -r requirements.txt
 pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
 yandex-music-downloader --help
 ```
+### 4. Обновление API (MarshalX)
+
+```bash
+git clone https://github.com/MarshalX/yandex-music-api
+cd yandex-music-api
+pip install .          # синхронный клиент
+pip install ".[async]" # с поддержкой асинхронного клиента
+```
+
 ## 🤖 Установка под Android
 ```bash
 termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install python ffmpeg git binutils wget -y && pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip && python -m venv bocchi_env && bocchi_env/bin/pip install setuptools wheel && bocchi_env/bin/pip install python-telegram-bot[job-queue] catboxpy mutagen requests python-dotenv yandex-music && wget -O bocchi_bot_android.py https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py && read -p "Введите токен Telegram бота: " TOKEN && echo "TELEGRAM_TOKEN=$TOKEN" > .env.example && bocchi_env/bin/python bocchi_bot_android.py
