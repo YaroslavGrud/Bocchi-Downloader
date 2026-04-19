@@ -97,6 +97,8 @@ bocchi_env/bin/python bocchi_bot_android.py
 - **Одиночные треки** → загружаются как есть
 - **Альбомы** → автоматически разбиваются на отдельные треки
 - **Плейлисты** → Не поддерживается из-за ограничений API Яндекса
+> Предположительное решение найдено в https://github.com/llistochek/yandex-music-downloader/issues/120 и https://github.com/llistochek/yandex-music-downloader/issues/132
+> но оно не работает из-за появления `sys.exit`
 
 ### Формат вывода
 
