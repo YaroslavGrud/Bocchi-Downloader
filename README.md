@@ -134,7 +134,7 @@ bocchi_env/bin/python bocchi_bot_android.py
 Проект распространяется под лицензией MIT. Подробности в файле [LICENSE](LICENSE).
 ## 🙏 Благодарности
 - [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) — загрузчик для Яндекс.Музыки (оставлен для совместимости)
-- [MarshalX](https://github.com/MarshalX) - обновлённый API и поддержку плейлистов
+- [MarshalX](https://github.com/MarshalX) - обновлённый API и поддержка плейлистов
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) — мощная библиотека для Telegram ботов
 - [catboxpy](https://github.com/anshonweb/catboxpy) — обёртка для Catbox/Litterbox
 - [Bothost](https://bothost.ru/) в предоставлении хостинг услуг
