@@ -7,7 +7,7 @@
 [![Arch](https://img.shields.io/badge/Arch-aarch64%20%7C%20armhf-blue)](https://github.com/YaroslavGrud/Bocchi-Downloader)
 [![Offline](https://img.shields.io/badge/Offline-Ready-success)](https://github.com/YaroslavGrud/Bocchi-Downloader)
 [![Size](https://img.shields.io/badge/Size-4_GB-orange)](https://github.com/YaroslavGrud/Bocchi-Downloader)
-[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+[![License: NonCommercial](https://img.shields.io/badge/License-NonCommercial-red.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 
 ## 📦 Что внутри?
