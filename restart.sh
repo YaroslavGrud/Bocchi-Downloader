@@ -1,28 +1,23 @@
 #!/bin/bash
-cd ~/bocchi_bot
+# Скрипт перезапуска бота Bocchi Downloader
+# Останавливает и удаляет старый контейнер, запрашивает токен, запускает новый и показывает логи
 
-# Если нет .env, запрашиваем токен
-if [ ! -f .env ]; then
-    echo "Файл .env не найден. Введите токен Telegram бота:"
-    read TOKEN
-    echo "TELEGRAM_TOKEN=$TOKEN" > .env
-    echo "✅ .env создан"
-fi
+cd ~/bocchi_bot || { echo "❌ Папка ~/bocchi_bot не найдена"; exit 1; }
 
-# Остановка и удаление контейнера
-docker stop bocchi_bot 2>/dev/null && echo "Контейнер остановлен"
-docker rm bocchi_bot 2>/dev/null && echo "Контейнер удалён"
+echo "🛑 Останавливаем и удаляем старый контейнер..."
+docker stop bocchi_bot 2>/dev/null && echo "   Контейнер остановлен"
+docker rm bocchi_bot 2>/dev/null && echo "   Контейнер удалён"
 
-# Пересборка образа
-docker build -t bocchi_bot .
+echo "🔑 Введите токен Telegram бота:"
+read TOKEN
 
-# Запуск нового контейнера
+echo "🚀 Запускаем новый контейнер..."
 docker run -d \
   --name bocchi_bot \
   --restart unless-stopped \
-  --env-file .env \
+  -e TELEGRAM_TOKEN="$TOKEN" \
   -v $(pwd)/data:/app/data \
   bocchi_bot
 
-echo "✅ Бот перезапущен"
-echo "Логи: docker logs -f bocchi_bot"
+echo "✅ Бот перезапущен. Показываем логи (нажмите Ctrl+C для выхода):"
+docker logs -f bocchi_bot
