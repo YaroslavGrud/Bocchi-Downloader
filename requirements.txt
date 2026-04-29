@@ -19,7 +19,5 @@ tzlocal==5.3.1
 urllib3==2.6.3
 yarl==1.22.0
 catboxpy
-
-# yandex-music и yandex-music-downloader из конкретных архивов (форки)
-yandex-music @ https://github.com/llistochek/yandex-music-api/archive/9623fbca7704f47766614efe51d66c9fd496714c.zip
+# yandex-music-downloader из конкретного архива (форк)
 yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip
