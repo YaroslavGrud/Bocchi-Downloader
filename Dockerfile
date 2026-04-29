@@ -19,9 +19,10 @@ RUN git clone https://github.com/MarshalX/yandex-music-api && \
 # 3. Установка yandex-music-downloader (из официального репозитория llistochek)
 RUN pip install --no-cache-dir -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
 
-# 4. Копируем обновлённый requirements.txt и устанавливаем остальные зависимости
+# 4. Копируем requirements.txt, удаляем из него строки с yandex-music* и yandex-music-downloader, затем устанавливаем остальные зависимости
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN grep -v "yandex-music" requirements.txt | grep -v "yandex-music-downloader" > requirements_clean.txt && \
+    pip install --no-cache-dir -r requirements_clean.txt
 
 # 5. Копируем весь код бота
 COPY . .
