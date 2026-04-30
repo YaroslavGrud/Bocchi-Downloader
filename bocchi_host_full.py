@@ -1,189 +1,113 @@
 # (c) 2026 Hanako
 # Bocchi Downloader (Server Edition)
-# Полная версия со всеми исправлениями и подробными комментариями.
-# Все ошибки NameError (cancel, menu и др.) устранены.
+# Полная версия со всеми исправлениями (NameError, sendMessageDraft и др.)
+# Работает с python-telegram-bot 21.6 и выше.
 
-import asyncio                                      # Асинхронная работа, создание задач, блокировки, очереди
-import aiohttp                                      # Асинхронные HTTP-запросы (API Яндекс.Музыки, обложки)
-import logging                                      # Запись логов
-import os                                           # Переменные окружения, файловая система
-import json                                         # Сериализация/десериализация JSON (состояние бота)
-import random                                       # Случайные числа (анимации, фразы)
-import re                                           # Регулярные выражения (парсинг ссылок, токенов)
-import shutil                                       # Операции с файлами и папками (удаление, проверка диска)
-import subprocess                                   # Запуск внешних процессов (ping)
-import time                                         # Метки времени, задержки
-import urllib.parse                                 # Парсинг URL (urlparse, parse_qs)
-import uuid                                         # Генерация уникальных идентификаторов
-from pathlib import Path                            # Удобная работа с путями
-import io                                           # Работа с байтовыми потоками (сжатие обложек)
-import gc                                           # Сборщик мусора (очистка памяти)
+import asyncio
+import aiohttp
+import logging
+import os
+import json
+import random
+import re
+import shutil
+import subprocess
+import time
+import urllib.parse
+import uuid
+from pathlib import Path
+import io
+import gc
 
-import psutil                                       # Информация о системе (CPU, память, диск)
-from catboxpy import AsyncCatboxClient, LitterboxClient  # Загрузка больших файлов на файловые хостинги
-from dotenv import load_dotenv                      # Загрузка переменных окружения из .env
-from mutagen.easyid3 import EasyID3                 # Простой доступ к ID3 тегам MP3
-from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2  # Детальная работа с ID3 тегами
-from mutagen.mp3 import MP3                         # Объект MP3-файла
-from mutagen.mp4 import MP4, MP4Cover               # Объект MP4/M4A-файла + обложка
-from mutagen import File                            # Универсальное открытие аудиофайла
-from PIL import Image                               # Работа с изображениями (сжатие обложек)
+import psutil
+from catboxpy import AsyncCatboxClient, LitterboxClient
+from dotenv import load_dotenv
+from mutagen.easyid3 import EasyID3
+from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
+from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4, MP4Cover
+from mutagen import File
+from PIL import Image
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
-)                                                   # Объекты Telegram Bot API
-from telegram.constants import ChatAction           # Действия в чате (печатает...)
+)
+from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, ConversationHandler, filters
-)                                                   # Фреймворк для создания бота
-from yandex_music import ClientAsync                # Асинхронный клиент Яндекс.Музыки
+)
+from yandex_music import ClientAsync
+
+# ---------- ИСПРАВЛЕНИЕ NameError: urlparse и parse_qs теперь импортированы ----------
+from urllib.parse import urlparse, parse_qs
 
 # ---------------------- НАСТРОЙКА ЛОГИРОВАНИЯ ----------------------
-logging.getLogger("httpx").setLevel(logging.WARNING)   # Убираем лишние логи от httpx
-load_dotenv()                                          # Загружаем переменные окружения из .env
+logging.getLogger("httpx").setLevel(logging.WARNING)
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(message)s')
-logger = logging.getLogger("BocchiStation")            # Основной логгер бота
+logger = logging.getLogger("BocchiStation")
 
 # ---------------------- ПАПКА ДЛЯ ДАННЫХ ----------------------
 DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)                          # Создаём папку data (если её нет) при старте
+DATA_DIR.mkdir(exist_ok=True)
 
 # ---------------------- КОНФИГУРАЦИЯ ----------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
-# Токен Telegram бота. Если не задан в .env, используется заглушка.
-
 DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")
-# Путь к исполняемому файлу загрузчика yandex-music-downloader.
-
 STATS_FILE = os.getenv("STATS_FILE", "data/stats.txt")
-# Файл, в котором хранится общий объём скачанных данных (в байтах).
-
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
-# Максимальное количество ссылок, принимаемых от пользователя за один раз.
-
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
-# Таймаут (в секундах) на скачивание одного трека.
-
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
-# Срок жизни токена пользователя в секундах (по умолчанию 24 часа).
-
 CLOUD_TIMEOUT = int(os.getenv("CLOUD_TIMEOUT", "120"))
-# Таймаут (в секундах) на загрузку файла на облачный сервис (при превышении 49 МБ).
-
 DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))
-# Качество загрузки по умолчанию: 0 – низкое, 1 – среднее, 2 – высокое.
-
 MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))
-# Минимальное свободное место на диске (в МБ), необходимое для продолжения загрузки.
-
 TRACK_DELAY_SECONDS = float(os.getenv("TRACK_DELAY_SECONDS", "5.0"))
-# Пауза между отправкой треков в Telegram (чтобы избежать превышения лимитов).
-
 STUCK_TIMEOUT = int(os.getenv("STUCK_TIMEOUT", "120"))
-# Если загрузка длится дольше этого времени, задача считается зависшей и появляется кнопка перезапуска.
-
 ACCUMULATION_DELAY = float(os.getenv("ACCUMULATION_DELAY", "5.0"))
-# Время, в течение которого бот ждёт новые ссылки перед началом обработки (пакетный режим).
 
 # ---------------------- ФАЙЛЫ СОСТОЯНИЯ ----------------------
 QUEUE_STATE_FILE = "data/download_queue_state.json"
-# Сохраняет очередь задач между перезапусками бота.
-
 USER_TOKENS_FILE = "data/user_tokens.json"
-# Содержит токены пользователей с временными метками.
-
 ACTIVE_MSGS_FILE = "data/active_status_msgs.json"
-# Содержит информацию о статусных сообщениях (для удаления после перезапуска).
-
 PENDING_TASKS_FILE = "data/pending_tasks.json"
-# Содержит отложенные задачи (когда чат был недоступен).
 
 # ---------------------- ВРЕМЯ ЗАПУСКА И АНТИСПАМ ----------------------
 BOT_START_TIME = time.time()
-# Время запуска бота (unix timestamp). Сообщения, отправленные до этого момента, игнорируются.
-
 COMMAND_COOLDOWN = 5.0
-# Минимальный интервал (в секундах) между обработкой команд меню (защита от спама).
-
 last_command_time = {}
-# Словарь {user_id: timestamp} для хранения времени последней выполненной команды меню.
 
 # ---------------------- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ----------------------
 download_semaphore = None
-# Семафор (asyncio.Semaphore), ограничивающий одновременное скачивание до 1 трека.
-
 download_queue = None
-# Очередь задач (asyncio.Queue), из которой воркер получает треки на скачивание.
-
 link_accumulators = {}
-# Словарь {user_id: [url1, url2, ...]} для накопления ссылок перед пакетной обработкой.
-
 user_delay_tasks = {}
-# Словарь {user_id: asyncio.Task}, хранящий активную задачу отложенной обработки ссылок.
-
 user_processing = {}
-# Флаг {user_id: True}, указывающий, что пользователь уже находится в процессе обработки.
-
 worker_busy = False
-# Глобальный флаг, показывающий, занят ли воркер в данный момент.
-
 active_tasks_count = 0
-# Количество задач, которые находятся в очереди или выполняются в данный момент.
-
 last_auth_warning = {}
-# {user_id: timestamp} последнего предупреждения о необходимости авторизации.
-# Используется, чтобы не спамить сообщениями.
-
 WARNING_COOLDOWN = 60
-# Минимальный интервал между повторными предупреждениями о необходимости токена (сек).
-
 worker_task = None
-# Ссылка на asyncio.Task, в котором работает воркер.
-
 token_checker_task = None
-# Ссылка на asyncio.Task периодической проверки истёкших токенов.
-
 memory_cleaner_task = None
-# Ссылка на asyncio.Task фоновой очистки памяти (если потребление > 50%).
-
 last_processed_msg = {}
-# Словарь {user_id: message_id} для предотвращения дублирования сообщений (из-за ретраев).
-
 user_locks = {}
-# Словарь {user_id: asyncio.Lock} для блокировки операций авторизации (избегаем гонок).
-
 user_tokens = {}
-# Словарь {user_id: {"token": "y0_...", "timestamp": 1234567890}} – сохранённые токены.
-
 active_status_msgs = {}
-# Словарь {task_id: {"chat_id": ..., "message_id": ...}} активных статусных сообщений загрузки.
-
 pending_tasks = {}
-# Словарь {chat_id: [task1, task2, ...]} отложенных задач, которые не удалось отправить из-за блокировки.
-
 current_task_info = {}
-# Словарь {task_id: {"start_time":..., "chat_id":..., "task":..., "process":..., "status_msg_id":...}}
-# Информация о задаче, которая выполняется прямо сейчас.
 
 # ---------------------- СОСТОЯНИЯ ДИАЛОГА ----------------------
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
-# Используются в ConversationHandler: состояние ожидания токена и ожидания ссылок.
 
 # ---------------------- НАЗВАНИЯ КАЧЕСТВА ----------------------
 QUALITY_NAMES = {0: "Низкое", 1: "Среднее", 2: "Высокое"}
-# Отображение числовых значений качества в читаемый вид.
-
 QUALITY_NAMES_GENITIVE = {0: "низкого", 1: "среднего", 2: "высокого"}
-# Родительный падеж для фраз типа "понижаю до среднего".
-
 QUALITY_BUTTONS = {"Низкое": 0, "Среднее": 1, "Высокое": 2}
-# Обратное отображение для кнопок выбора качества.
 
 # ---------------------- КЛАВИАТУРЫ ----------------------
 quality_keyboard = [[KeyboardButton("Низкое"), KeyboardButton("Среднее"), KeyboardButton("Высокое")]]
 quality_markup = ReplyKeyboardMarkup(quality_keyboard, resize_keyboard=True, one_time_keyboard=True)
-# Клавиатура, показываемая при смене качества.
 
 main_menu_keyboard = [
     ["▶ Начать загрузку", "⏹ Отменить загрузку"],
@@ -192,7 +116,24 @@ main_menu_keyboard = [
     ["🆘 Экстренная остановка"]
 ]
 main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
-# Основное меню бота.
+
+
+# ======================================================================
+# ФУНКЦИЯ ДЛЯ ОТПРАВКИ sendMessageDraft (реализована через bot._post)
+# ======================================================================
+async def _send_message_draft(bot, chat_id, draft_id, text):
+    """Отправляет черновик с эффектом «печати» (streaming), используя метод sendMessageDraft."""
+    try:
+        await bot._post(
+            "sendMessageDraft",
+            {
+                "chat_id": chat_id,
+                "draft_id": draft_id,
+                "text": text
+            }
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки черновика: {e}")
 
 
 # ======================================================================
@@ -200,7 +141,6 @@ main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
 # ======================================================================
 
 def save_user_tokens():
-    """Сохраняет словарь user_tokens в JSON-файл."""
     try:
         with open(USER_TOKENS_FILE, 'w', encoding='utf-8') as f:
             json.dump(user_tokens, f, ensure_ascii=False, indent=2)
@@ -208,7 +148,6 @@ def save_user_tokens():
         logger.error(f"Ошибка сохранения токенов: {e}")
 
 def load_user_tokens():
-    """Загружает токены из файла; просроченные удаляются."""
     global user_tokens
     if not os.path.exists(USER_TOKENS_FILE):
         return
@@ -216,7 +155,6 @@ def load_user_tokens():
         with open(USER_TOKENS_FILE, 'r', encoding='utf-8') as f:
             loaded = json.loads(f.read().strip())
         now = time.time()
-        # Оставляем только токены, не превысившие срок жизни
         user_tokens = {
             uid: data for uid, data in loaded.items()
             if now - data.get('timestamp', 0) <= TOKEN_LIFETIME
@@ -226,24 +164,20 @@ def load_user_tokens():
         logger.error(f"Ошибка загрузки токенов: {e}")
 
 def is_token_valid_by_id(user_id: int) -> bool:
-    """Проверяет, валиден ли токен пользователя (не истёк)."""
     data = user_tokens.get(str(user_id))
     return data is not None and (time.time() - data['timestamp']) <= TOKEN_LIFETIME
 
 def get_user_token(user_id: int) -> str | None:
-    """Возвращает строку токена, если он ещё действителен, иначе None."""
     data = user_tokens.get(str(user_id))
     if data and is_token_valid_by_id(user_id):
         return data['token']
     return None
 
 def set_user_token(user_id: int, token: str):
-    """Сохраняет токен пользователя с текущим временем."""
     user_tokens[str(user_id)] = {"token": token, "timestamp": time.time()}
     save_user_tokens()
 
 def delete_user_token(user_id: int):
-    """Удаляет токен пользователя."""
     user_tokens.pop(str(user_id), None)
     save_user_tokens()
 
@@ -251,9 +185,7 @@ def delete_user_token(user_id: int):
 # ======================================================================
 # ФУНКЦИИ ДЛЯ СТАТУСНЫХ СООБЩЕНИЙ
 # ======================================================================
-
 def save_active_msgs():
-    """Сохраняет информацию о статусных сообщениях загрузки (для перезапуска)."""
     try:
         with open(ACTIVE_MSGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(active_status_msgs, f, ensure_ascii=False, indent=2)
@@ -261,7 +193,6 @@ def save_active_msgs():
         logger.error(f"Ошибка сохранения активных сообщений: {e}")
 
 def load_active_msgs():
-    """Загружает статусные сообщения из файла."""
     global active_status_msgs
     if os.path.exists(ACTIVE_MSGS_FILE):
         try:
@@ -271,7 +202,6 @@ def load_active_msgs():
             logger.error(f"Ошибка загрузки активных сообщений: {e}")
 
 async def cleanup_orphan_messages(app):
-    """Удаляет «висящие» статусные сообщения, оставшиеся после прошлого запуска бота."""
     for task_id, info in list(active_status_msgs.items()):
         try:
             await app.bot.delete_message(chat_id=info['chat_id'], message_id=info['message_id'])
@@ -284,9 +214,7 @@ async def cleanup_orphan_messages(app):
 # ======================================================================
 # ФУНКЦИИ ДЛЯ ОТЛОЖЕННЫХ ЗАДАЧ
 # ======================================================================
-
 def save_pending_tasks():
-    """Сохраняет отложенные задачи в JSON."""
     try:
         with open(PENDING_TASKS_FILE, 'w', encoding='utf-8') as f:
             json.dump(pending_tasks, f, ensure_ascii=False, indent=2)
@@ -294,7 +222,6 @@ def save_pending_tasks():
         logger.error(f"Ошибка сохранения отложенных задач: {e}")
 
 def load_pending_tasks():
-    """Загружает отложенные задачи из файла."""
     global pending_tasks
     if os.path.exists(PENDING_TASKS_FILE):
         try:
@@ -304,16 +231,13 @@ def load_pending_tasks():
             logger.error(f"Ошибка загрузки отложенных задач: {e}")
 
 def add_pending_task(chat_id: int, task: dict):
-    """Добавляет задачу в список отложенных для конкретного чата."""
     pending_tasks.setdefault(str(chat_id), []).append(task)
     save_pending_tasks()
 
 def get_pending_tasks(chat_id: int) -> list:
-    """Возвращает список отложенных задач для чата."""
     return pending_tasks.get(str(chat_id), [])
 
 def clear_pending_tasks(chat_id: int):
-    """Очищает отложенные задачи для чата."""
     pending_tasks.pop(str(chat_id), None)
     save_pending_tasks()
 
@@ -323,24 +247,20 @@ def clear_pending_tasks(chat_id: int):
 # ======================================================================
 
 def is_message_too_old(update: Update) -> bool:
-    """Проверяет, было ли сообщение отправлено до старта бота (игнорируем старые)."""
     return update.message and update.message.date.timestamp() < BOT_START_TIME
 
 def is_token_valid(context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Проверяет, действителен ли токен, сохранённый в контексте пользователя."""
+    # В версии 21.6 _user_id всё ещё доступен (приватный атрибут, но рабочий)
     return is_token_valid_by_id(context._user_id)
 
 def get_plural_tracks(n: int) -> str:
-    """Возвращает "N трек" / "N трека" / "N треков" с правильным склонением."""
     if n % 10 == 1 and n % 100 != 11:
         return f"{n} трек"
     elif 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
         return f"{n} трека"
     return f"{n} треков"
 
-# ---------- Обложки ----------
 async def fetch_cover_from_yandex(cover_uri: str) -> bytes | None:
-    """Скачивает обложку высокого разрешения с Яндекс.Музыки по cover_uri."""
     if not cover_uri:
         return None
     try:
@@ -354,21 +274,15 @@ async def fetch_cover_from_yandex(cover_uri: str) -> bytes | None:
     return None
 
 def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> bytes | None:
-    """
-    Сжимает изображение обложки в JPEG так, чтобы размер не превышал max_size_bytes.
-    Использует снижение качества и ресайз. Если сжать не удаётся, возвращает None.
-    """
     if not cover_bytes or len(cover_bytes) <= max_size_bytes:
         return cover_bytes
     try:
         img = Image.open(io.BytesIO(cover_bytes)).convert('RGB')
-        # Пробуем уменьшать качество
         for quality in [85, 75, 65, 55, 45, 35, 25]:
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=quality, optimize=True)
             if buf.tell() <= max_size_bytes:
                 return buf.getvalue()
-        # Уменьшаем размер
         for scale in [0.75, 0.5, 0.3, 0.2, 0.15]:
             w, h = int(img.width * scale), int(img.height * scale)
             if w < 10 or h < 10: continue
@@ -377,7 +291,6 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
             resized.save(buf, format='JPEG', quality=75, optimize=True)
             if buf.tell() <= max_size_bytes:
                 return buf.getvalue()
-        # Экстремальное сжатие
         for scale in [0.1, 0.08]:
             w, h = int(img.width * scale), int(img.height * scale)
             if w < 8 or h < 8: continue
@@ -391,17 +304,14 @@ def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> byte
     return None
 
 def extract_cover_from_audio(file_path: Path) -> bytes | None:
-    """Извлекает встроенную обложку из MP3/M4A-файла."""
     try:
         audio = File(file_path)
         if audio is None: return None
-        # MP3: ищем APIC:
         if hasattr(audio, 'tags') and audio.tags:
             if 'APIC:' in audio.tags:
                 for tag in audio.tags.values():
                     if isinstance(tag, APIC):
                         return tag.data
-            # M4A: ищем covr
             if 'covr' in audio.tags and audio.tags['covr']:
                 if isinstance(audio.tags['covr'][0], MP4Cover):
                     return bytes(audio.tags['covr'][0])
@@ -410,7 +320,6 @@ def extract_cover_from_audio(file_path: Path) -> bytes | None:
     return None
 
 def get_audio_duration(file_path: Path) -> int:
-    """Возвращает длительность аудио в секундах."""
     try:
         if file_path.suffix.lower() == '.m4a':
             return int(MP4(file_path).info.length)
@@ -418,9 +327,7 @@ def get_audio_duration(file_path: Path) -> int:
     except:
         return 0
 
-# ---------- Диск, мусор, статистика ----------
 def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
-    """Проверяет, достаточно ли свободного места. Возвращает (хватает?, свободно_МБ)."""
     try:
         stat = shutil.disk_usage(Path.cwd())
         free_mb = stat.free / (1024 * 1024)
@@ -429,7 +336,6 @@ def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
         return True, 9999.0
 
 def cleanup_old_tmp_dirs():
-    """Удаляет временные папки bocchi_tmp_*, оставшиеся от предыдущих загрузок."""
     cnt = 0
     for tmp_dir in Path('.').glob('bocchi_tmp_*'):
         if tmp_dir.is_dir():
@@ -439,7 +345,6 @@ def cleanup_old_tmp_dirs():
         logger.info(f"Удалено старых временных папок: {cnt}")
 
 def add_stats(bytes_added: int):
-    """Увеличивает счётчик скачанных байт в файле статистики."""
     try:
         current = 0.0
         if os.path.exists(STATS_FILE):
@@ -451,7 +356,6 @@ def add_stats(bytes_added: int):
         pass
 
 def get_formatted_stats() -> str:
-    """Возвращает строку с общим объёмом скачанного (Б, КБ, МБ, ГБ, ТБ)."""
     try:
         if not os.path.exists(STATS_FILE):
             return "0 Б"
@@ -466,10 +370,6 @@ def get_formatted_stats() -> str:
         return "0 Б"
 
 def get_ping() -> float:
-    """
-    Измеряет пинг до ya.ru с помощью системной утилиты ping.
-    Никаких лишних логов, только число (мс) или 0 при ошибке.
-    """
     try:
         out = subprocess.check_output(["ping", "-c", "1", "-W", "1", "ya.ru"],
                                       stderr=subprocess.DEVNULL, text=True)
@@ -481,11 +381,9 @@ def get_ping() -> float:
     return 0.0
 
 def get_user_quality(context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Возвращает текущее значение качества пользователя (по умолчанию DEFAULT_QUALITY)."""
     return context.user_data.get('quality', DEFAULT_QUALITY)
 
 def set_user_quality(context: ContextTypes.DEFAULT_TYPE, quality: int) -> bool:
-    """Задаёт качество пользователя, если значение входит в QUALITY_NAMES."""
     if quality in QUALITY_NAMES:
         context.user_data['quality'] = quality
         return True
@@ -493,11 +391,10 @@ def set_user_quality(context: ContextTypes.DEFAULT_TYPE, quality: int) -> bool:
 
 
 # ======================================================================
-# ПАРСИНГ ССЫЛОК ЯНДЕКС.МУЗЫКИ
+# ПАРСИНГ ССЫЛОК ЯНДЕКС.МУЗЫКИ (urlparse и parse_qs используются смело!)
 # ======================================================================
 
 def extract_base_url(url: str) -> str:
-    """Извлекает домен и подставляет /music, если его нет."""
     m = re.match(r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3})(?:/music)?', url, re.IGNORECASE)
     if m:
         base = m.group(1)
@@ -505,33 +402,22 @@ def extract_base_url(url: str) -> str:
     return "https://music.yandex.ru"
 
 def parse_yandex_url(url: str):
-    """
-    Распознаёт тип контента в ссылке Яндекс.Музыки.
-    Возвращает (тип, идентификатор, владелец/username) или (None, None, None).
-    """
     parsed = urlparse(url)
     path = parsed.path
     query = parse_qs(parsed.query)
 
-    # iframe плейлист
     m = re.search(r'/iframe/playlist/([^/]+)/(\d+)', path)
     if m: return ('iframe_playlist', m.group(2), m.group(1))
-    # трек
     m = re.search(r'/track/(\d+)', path)
     if m: return ('track', m.group(1), None)
-    # альбом
     m = re.search(r'/album/(\d+)', path)
     if m: return ('album', m.group(1), None)
-    # плейлист пользователя
     m = re.search(r'/users/([^/]+)/playlists/(\d+)', path)
     if m: return ('playlist', m.group(2), m.group(1))
-    # плейлист по id
     m = re.search(r'/playlist/(\d+)', path)
     if m: return ('playlist', m.group(1), None)
-    # плейлист по uuid
     m = re.search(r'/playlists/([a-z0-9\-\.]+)', path)
     if m: return ('uuid_playlist', m.group(1), None)
-    # js-обработчик
     if 'handlers/playlist.jsx' in path:
         owner = query.get('owner', [None])[0]
         kinds = query.get('kinds', [None])[0]
@@ -540,24 +426,17 @@ def parse_yandex_url(url: str):
 
 
 # ======================================================================
-# АНИМИРОВАННАЯ ОТПРАВКА СООБЩЕНИЙ
+# АНИМИРОВАННАЯ ОТПРАВКА СООБЩЕНИЙ (ВКЛЮЧАЯ send_animated_message)
 # ======================================================================
 
 async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
-    """
-    Отправляет сообщение с эффектом печати (черновик -> реальное сообщение).
-    После отправки очищает черновик коротким уведомлением.
-    """
     draft_id = int(time.time() * 1000) + random.randint(1, 10000)
     for attempt in range(max_retries):
         try:
-            # показываем черновик
-            await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
+            await _send_message_draft(bot, chat_id, draft_id, text)
             await asyncio.sleep(delay)
-            # отправляем реальное сообщение
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            # очищаем черновик
-            await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="⏳ Ожидаю новое сообщение")
+            await _send_message_draft(bot, chat_id, draft_id, "⏳ Ожидаю новое сообщение")
             return msg
         except Exception as e:
             logger.warning(f"Анимация {attempt+1}: {e}")
@@ -567,12 +446,10 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
     return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает главное меню."""
     await send_animated_message(context.bot, update.effective_chat.id,
                                 "🎸 Главное меню:", reply_markup=main_markup)
 
 async def show_main_menu_from_chat(bot, chat_id):
-    """Показывает главное меню в произвольном чате."""
     await send_animated_message(bot, chat_id, "🎸 Главное меню:", reply_markup=main_markup)
 
 
@@ -581,7 +458,6 @@ async def show_main_menu_from_chat(bot, chat_id):
 # ======================================================================
 
 async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает текущее качество и клавиатуру для его смены."""
     if is_message_too_old(update): return
     current = get_user_quality(context)
     await update.message.reply_text(
@@ -592,31 +468,25 @@ async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ======================================================================
-# КОМАНДА /status (АНИМИРОВАННЫЙ СТАТУС)
+# КОМАНДА /status
 # ======================================================================
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Анимированный статус сервера: CPU, память, пинг, очередь загрузок.
-    Обновляет черновик несколько раз, затем очищает его.
-    """
     if is_message_too_old(update): return
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
 
-    # Если был открыт другой черновик статуса – завершаем его
     old = context.user_data.get('status_draft')
     if old:
         try:
-            await context.bot.send_message_draft(chat_id=old['chat_id'], draft_id=old['draft_id'],
-                                                 text="⏹️ Статус прерван")
+            await _send_message_draft(context.bot, old['chat_id'], old['draft_id'], "⏹️ Статус прерван")
         except: pass
         context.user_data.pop('status_draft', None)
 
     draft_id = int(time.time() * 1000) + user_id
     try:
-        await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id,
-                                             text="🌸 Секретный блокнот Хитори 🎸\n\nПодожди, собираю данные...")
+        await _send_message_draft(context.bot, chat_id, draft_id,
+                                             "🌸 Секретный блокнот Хитори 🎸\n\nПодожди, собираю данные...")
         context.user_data['status_draft'] = {'draft_id': draft_id, 'chat_id': chat_id}
     except Exception as e:
         logger.error(f"Ошибка запуска черновика: {e}")
@@ -631,13 +501,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cpu = psutil.cpu_percent()
             mem = psutil.virtual_memory()
 
-            # CPU
             if cpu < 15: c_status = "тихим ожиданием новых задач"
             elif cpu < 45: c_status = "активной проверкой твоих ссылок"
             elif cpu < 80: c_status = "сложными расчетами и очередью"
             else: c_status = "попытками не сломаться от нагрузки"
 
-            # ОЗУ
             if mem.percent < 30: m_status = "приятной пустотой, мне дышится легко"
             elif mem.percent < 70: m_status = "самыми важными вещами, всё под рукой"
             else: m_status = "почти целиком, мне становится тесно"
@@ -646,7 +514,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          f"• Мысли заняты {c_status} ({cpu}%)\n"
                          f"• Память заполнена {m_status} ({mem.percent}%)\n\n")
 
-            # Пинг
             ping_val = get_ping()
             if ping_val > 0:
                 if ping_val < 20: n_lvl = "сейчас просто идеальная"
@@ -657,7 +524,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 net_text = "• Сеть: не могу достучаться до Яндекса...\n\n"
 
-            # Очередь
             q = active_tasks_count
             if q == 0: queue_text = "• Сейчас я свободна, жду новых ссылок 🎸"
             elif q == 1: queue_text = f"• Сейчас меня ждёт {get_plural_tracks(q)}"
@@ -679,23 +545,21 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             for retry in range(2):
                 try:
-                    await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=status_text)
+                    await _send_message_draft(context.bot, chat_id, draft_id, status_text)
                     break
                 except Exception as e:
                     logger.warning(f"Ошибка обновления черновика (шаг {step}, попытка {retry+1}): {e}")
                     if retry == 1:
                         await context.bot.send_message(chat_id, "❌ Ошибка при обновлении статуса.")
-                        await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id,
-                                                             text="📊 Статус завершён")
+                        await _send_message_draft(context.bot, chat_id, draft_id, "📊 Статус завершён")
                         context.user_data.pop('status_draft', None)
                         await show_main_menu(update, context)
                         return
                     await asyncio.sleep(0.5)
             await asyncio.sleep(2)
     finally:
-        # гарантированно очищаем черновик
         try:
-            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="📊 Статус завершён")
+            await _send_message_draft(context.bot, chat_id, draft_id, "📊 Статус завершён")
         except: pass
         context.user_data.pop('status_draft', None)
 
@@ -707,7 +571,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======================================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start – приветствие и кнопка «Начать работу»."""
     if is_message_too_old(update): return WAITING_FOR_LINK
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -729,7 +592,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_LINK
 
 async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверяет сессию: если токен активен – меню, иначе запрашивает авторизацию."""
     if is_message_too_old(update): return WAITING_FOR_LINK
     user_id = update.effective_user.id
     lock = user_locks.setdefault(user_id, asyncio.Lock())
@@ -752,11 +614,9 @@ async def check_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TOKEN
 
 async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принимает токен, проверяет его и сохраняет."""
     if is_message_too_old(update): return WAITING_FOR_TOKEN
     user_id = update.effective_user.id
     raw = update.message.text.strip()
-    # ищем y0_... или access_token=
     m = re.search(r"(y0_[a-zA-Z0-9_-]+)", raw)
     if m: token = m.group(1)
     else:
@@ -768,7 +628,6 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await update.message.delete()
     except: pass
     status_msg = await update.message.reply_text("🔍 Проверяю токен…")
-    # попытка 1: ClientAsync
     try:
         client = ClientAsync(token)
         await client.init()
@@ -783,7 +642,6 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return WAITING_FOR_LINK
     except Exception as e:
         logger.warning(f"ClientAsync не сработал: {e}")
-    # попытка 2: прямой HTTP
     try:
         headers = {"Authorization": f"OAuth {token}"}
         async with aiohttp.ClientSession() as session:
@@ -802,12 +660,7 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text("❌ Токен не подходит… Попробуй ещё раз.")
     return WAITING_FOR_TOKEN
 
-# ======================================================================
-# КОМАНДЫ ВЫХОДА И ОТМЕНЫ
-# ======================================================================
-
 async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет токен пользователя."""
     if is_message_too_old(update): return
     user_id = update.effective_user.id
     delete_user_token(user_id)
@@ -821,7 +674,6 @@ async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик /cancel – завершает текущий диалог."""
     await send_animated_message(
         context.bot, update.effective_chat.id,
         "❌ Действие отменено. Напиши /start, если захочешь начать заново."
@@ -829,7 +681,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик /menu – показывает главное меню."""
     if is_message_too_old(update): return WAITING_FOR_LINK
     if user_processing.get(update.effective_user.id):
         await update.message.reply_text("⏳ Я пока занята загрузкой…")
@@ -843,14 +694,9 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======================================================================
 
 async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
-    """
-    Отменяет все текущие загрузки пользователя в чате.
-    Убивает активный процесс, удаляет статусные сообщения, вычищает задачи из очереди.
-    """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    # Собираем задачи, принадлежащие этому чату
     tasks_to_cancel = [(tid, info) for tid, info in current_task_info.items() if info['chat_id'] == chat_id]
 
     if not tasks_to_cancel:
@@ -871,7 +717,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
         batch_idx = task.get('batch_index', 0)
         batch_total = task.get('batch_total', 0)
 
-        # Формируем человекочитаемое описание отменяемого контента
         if batch_type == 'album':
             desc = f"альбома «{batch_name}» (трек {batch_idx} из {batch_total})"
         elif batch_type == 'playlist':
@@ -885,7 +730,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
         else:
             await update.message.reply_text(cancel_msg)
 
-        # Убиваем процесс загрузки, если он ещё жив
         if proc and not proc.returncode:
             try:
                 proc.kill()
@@ -893,7 +737,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
             except:
                 pass
 
-        # Удаляем статусное сообщение задачи
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             try:
@@ -904,7 +747,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
         current_task_info.pop(task_id, None)
         cancelled_count += 1
 
-    # Убираем оставшиеся задачи этого пользователя из очереди
     remaining = []
     removed_from_queue = 0
     while not download_queue.empty():
@@ -919,7 +761,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
     for t in remaining:
         await download_queue.put(t)
 
-    # Обновляем глобальный счётчик активных задач
     global active_tasks_count
     active_tasks_count -= (cancelled_count + removed_from_queue)
     if active_tasks_count < 0:
@@ -936,7 +777,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
     await show_main_menu_from_chat(context.bot, chat_id)
 
 async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик inline-кнопки отмены загрузки."""
     await cancel_download(update, context, is_callback=True)
 
 
@@ -945,7 +785,6 @@ async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT
 # ======================================================================
 
 async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принудительно убивает все процессы, очищает очередь и сбрасывает счётчики."""
     chat_id = update.effective_chat.id
     await update.message.reply_text("🛑 Экстренная остановка… Убиваю процессы и чищу очередь.")
 
@@ -980,7 +819,6 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu_from_chat(context.bot, chat_id)
 
 async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Перезапускает зависшую задачу по нажатию inline-кнопки."""
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
@@ -994,7 +832,6 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
                     await proc.wait()
                 except:
                     pass
-            # Удаляем статусное сообщение
             msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
             if msg_id:
                 try:
@@ -1013,15 +850,10 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
 
 
 # ======================================================================
-# ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ (С ЗАЩИТОЙ ОТ СПАМА КОМАНД)
+# ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ
 # ======================================================================
 
 async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Центральный обработчик всех текстовых сообщений.
-    Определяет, является ли сообщение командой меню или ссылкой,
-    и выполняет соответствующее действие.
-    """
     if is_message_too_old(update):
         return WAITING_FOR_LINK
 
@@ -1029,33 +861,28 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text
 
-    # ---------- ЗАЩИТА ОТ ЧАСТЫХ КОМАНД МЕНЮ ----------
     menu_commands = [
         "🎵 Начать работу", "▶ Начать загрузку", "🔓 Удалить токен",
         "🔄 Обновить токен", "🎵 Качество", "📊 Статус",
         "⏹ Отменить загрузку", "🆘 Экстренная остановка"
-    ] + list(QUALITY_BUTTONS.keys())   # кнопки выбора качества тоже считаются командами
+    ] + list(QUALITY_BUTTONS.keys())
 
     if text in menu_commands:
         now = time.time()
         last_time = last_command_time.get(user_id, 0)
         if now - last_time < COMMAND_COOLDOWN:
-            # Команда пришла слишком быстро – удаляем сообщение и молча выходим
             try:
                 await update.message.delete()
             except:
                 pass
             return WAITING_FOR_LINK
-        # Запоминаем время выполнения команды
         last_command_time[user_id] = now
 
-    # Защита от повторной обработки того же сообщения
     msg_id = update.message.message_id
     if last_processed_msg.get(user_id) == msg_id:
         return WAITING_FOR_LINK
     last_processed_msg[user_id] = msg_id
 
-    # ---------- ОБРАБОТКА КОМАНД МЕНЮ ----------
     if text == "🎵 Начать работу":
         return await check_session(update, context)
     if text == "▶ Начать загрузку":
@@ -1091,10 +918,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Не получилось сменить качество.")
         return WAITING_FOR_LINK
 
-    # ---------- ОБРАБОТКА ПОТЕНЦИАЛЬНЫХ ССЫЛОК ----------
     message = update.message
 
-    # Извлечение ссылки из HTML-кода (например, iframe)
     if 'iframe' in text and 'music.yandex' in text:
         src_match = re.search(r'src="(https?://music\.yandex\.[a-z]{2,3}/[^"]+)"', text, re.IGNORECASE)
         if src_match:
@@ -1105,7 +930,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, "❌ Не удалось найти ссылку в HTML-коде.")
             return WAITING_FOR_LINK
 
-    # Проверяем, есть ли у пользователя действующий токен
     if not is_token_valid(context):
         try:
             await message.delete()
@@ -1121,7 +945,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return WAITING_FOR_TOKEN
 
-    # Ищем все ссылки в сообщении (включая caption)
     content = text + " " + (update.message.caption or "")
     url_pattern = re.compile(r'https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?(?:/[^\s]+)?', re.IGNORECASE)
     urls = url_pattern.findall(content)
@@ -1135,7 +958,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, "❌ Я не смогла распознать ссылку…")
         return WAITING_FOR_LINK
 
-    # Добавляем ссылки в накопитель и запускаем отложенную обработку
     link_accumulators.setdefault(user_id, []).extend(valid_urls)
     if user_processing.get(user_id):
         await context.bot.send_message(chat_id, "🔄 Я пока занята предыдущей загрузкой… Подожди немножко.")
@@ -1187,12 +1009,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def make_track_dict(track, base_url: str, original_url: str,
                     batch_type=None, batch_name=None, batch_artist=None, batch_owner=None,
                     total=0, cover_bytes=None, album=None, year=None, genre=None):
-    """
-    Создаёт универсальный словарь с информацией о треке.
-    track может быть объектом библиотеки yandex_music или словарём из API плейлиста.
-    """
     if isinstance(track, dict):
-        # Данные из плейлиста (HTTP API)
         artist = ', '.join(a.get('name', '') for a in track.get('artists', [])) or "Неизвестен"
         title = track.get('title', 'Неизвестный трек')
         version = track.get('version') or track.get('subtitle')
@@ -1201,7 +1018,6 @@ def make_track_dict(track, base_url: str, original_url: str,
         tid = track['id']
         duration = track.get('duration_ms', 0) // 1000
     else:
-        # Объект из библиотеки yandex_music
         artist = ', '.join(a.name for a in track.artists) if track.artists else "Неизвестен"
         title = track.title
         if track.version:
@@ -1228,10 +1044,6 @@ def make_track_dict(track, base_url: str, original_url: str,
 
 
 async def process_accumulated_links(user_id, chat_id, context, token):
-    """
-    Разбирает все накопленные ссылки пользователя, получает список треков,
-    формирует задания и добавляет их в общую очередь загрузки.
-    """
     user_processing[user_id] = True
 
     raw_links = list(dict.fromkeys(link_accumulators.pop(user_id, [])))[:MAX_LINKS]
@@ -1241,7 +1053,6 @@ async def process_accumulated_links(user_id, chat_id, context, token):
 
     logger.info(f"Обработка ссылок от {user_id}: {raw_links}")
 
-    # Инициализация клиента Яндекс.Музыки
     try:
         client = ClientAsync(token)
         await client.init()
@@ -1365,17 +1176,14 @@ async def process_accumulated_links(user_id, chat_id, context, token):
 # ======================================================================
 
 def save_queue_state():
-    """Сохраняет все невыполненные задачи из очереди в JSON."""
     tasks = []
     while not download_queue.empty():
         try:
             tasks.append(download_queue.get_nowait())
         except asyncio.QueueEmpty:
             break
-    # Возвращаем задачи обратно в очередь
     for t in tasks:
         download_queue.put_nowait(t)
-    # Сериализуем без cover_bytes (они не сохраняются)
     serial = [{k: v for k, v in t.items() if k != 'cover_bytes'} for t in tasks]
     try:
         with open(QUEUE_STATE_FILE, 'w', encoding='utf-8') as f:
@@ -1385,7 +1193,6 @@ def save_queue_state():
         logger.error(f"Ошибка сохранения очереди: {e}")
 
 def load_queue_state():
-    """Загружает сохранённые задачи из файла (если он есть)."""
     if not os.path.exists(QUEUE_STATE_FILE):
         return
     try:
@@ -1415,12 +1222,8 @@ def load_queue_state():
 # ======================================================================
 
 async def worker_loop(app):
-    """
-    Бесконечный цикл, обрабатывающий очередь загрузок.
-    Скачивает трек, добавляет теги, обложку, отправляет в чат.
-    """
     global worker_busy, active_tasks_count
-    chat_temp_msg = {}   # временные сообщения по чатам (чтобы не засорять)
+    chat_temp_msg = {}
 
     while True:
         if not shutil.which(DOWNLOADER_PATH):
@@ -1443,7 +1246,6 @@ async def worker_loop(app):
                 success = False
                 actual_quality_used = current_quality
                 try:
-                    # Удаляем предыдущие сообщения статуса этого же чата/задачи
                     old = active_status_msgs.pop(task_id, None)
                     if old:
                         try:
@@ -1459,7 +1261,6 @@ async def worker_loop(app):
 
                     tmp_dir.mkdir(exist_ok=True)
 
-                    # Кнопка отмены под статусным сообщением
                     keyboard = InlineKeyboardMarkup([
                         [InlineKeyboardButton("⏹ Отменить загрузку", callback_data="cancel_download")]
                     ])
@@ -1471,7 +1272,6 @@ async def worker_loop(app):
                     batch_index = task.get('batch_index', 1)
                     batch_total = task.get('batch_total', 1)
 
-                    # Формируем заголовок статуса
                     header = ""
                     if batch_type == 'album':
                         header = f"📀 Альбом: {batch_name}\n🎤 {batch_artist}\n"
@@ -1501,7 +1301,6 @@ async def worker_loop(app):
                         "status_msg_id": status_msg.message_id
                     }
 
-                    # Функция запуска загрузчика
                     async def run_downloader(quality, tmp_path):
                         nonlocal downloader_process
                         cmd = [
@@ -1530,7 +1329,6 @@ async def worker_loop(app):
                             proc.kill()
                             return -1, b'', b'Timeout'
 
-                    # Попытки скачивания (до 3) с возможным понижением качества
                     for attempt in range(3):
                         if time.time() - start_time > STUCK_TIMEOUT and not stuck_notified:
                             stuck_notified = True
@@ -1543,7 +1341,6 @@ async def worker_loop(app):
                             except:
                                 pass
 
-                        # Проверка места на диске
                         enough, free_mb = check_disk_space()
                         if not enough:
                             if current_quality > 0:
@@ -1567,7 +1364,7 @@ async def worker_loop(app):
                         shutil.rmtree(tmp_dir, ignore_errors=True)
                         tmp_dir.mkdir(exist_ok=True)
 
-                        if returncode == -9:  # нехватка памяти
+                        if returncode == -9:
                             if current_quality > 0:
                                 current_quality -= 1
                                 await app.bot.send_message(chat_id, "⚠️ Нехватка памяти. Понижаю качество.")
@@ -1589,11 +1386,9 @@ async def worker_loop(app):
                         current_task_info.pop(task_id, None)
                         continue
 
-                    # Уведомление, если качество было снижено
                     if actual_quality_used != task.get('quality', DEFAULT_QUALITY):
                         await app.bot.send_message(chat_id, f"🎵 Трек скачан в качестве: {QUALITY_NAMES[actual_quality_used]}.")
 
-                    # Поиск скачанных файлов
                     files = list(tmp_dir.rglob('*.mp3')) + list(tmp_dir.rglob('*.m4a'))
                     for f_path in files:
                         file_size_mb = f_path.stat().st_size / (1024 * 1024)
@@ -1604,7 +1399,6 @@ async def worker_loop(app):
                         genre = task.get('genre')
                         cover_bytes = task.get('cover_bytes')
 
-                        # Читаем тексты песен из .lrc
                         lyrics = None
                         lrc_file = f_path.with_suffix('.lrc')
                         if lrc_file.exists():
@@ -1613,7 +1407,6 @@ async def worker_loop(app):
                             except:
                                 pass
 
-                        # Записываем теги
                         try:
                             if f_path.suffix.lower() == '.m4a':
                                 audio = MP4(f_path)
@@ -1651,18 +1444,15 @@ async def worker_loop(app):
                         except Exception as tag_e:
                             logger.error(f"Ошибка записи тегов: {tag_e}")
 
-                        # Определяем финальное имя файла
                         safe_name = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
                         final_path = f_path.with_name(safe_name)
                         f_path.rename(final_path)
 
-                        # Извлекаем обложку для миниатюры
                         thumb = None
                         embedded_cover = extract_cover_from_audio(final_path) or cover_bytes
                         if embedded_cover:
                             thumb = compress_cover(embedded_cover, 200*1024) if len(embedded_cover) > 200*1024 else embedded_cover
 
-                        # Отправка в Telegram
                         if file_size_mb > 49.0:
                             uploaded = False
                             try:
@@ -1705,7 +1495,6 @@ async def worker_loop(app):
                         await asyncio.sleep(TRACK_DELAY_SECONDS)
                         gc.collect()
 
-                    # Финальное сообщение после обработки всего пакета
                     if batch_total and batch_index == batch_total:
                         if batch_type == 'album':
                             finish = f"🎸 Альбом «{batch_name}» полностью загружен!"
@@ -1742,19 +1531,17 @@ async def worker_loop(app):
 
 
 # ======================================================================
-# ФОНОВЫЕ ЗАДАЧИ (ОЧИСТКА ПАМЯТИ, ПРОВЕРКА ТОКЕНОВ)
+# ФОНОВЫЕ ЗАДАЧИ
 # ======================================================================
 
 async def memory_cleaner():
-    """Периодически вызывает сборщик мусора, если ОЗУ загружена более чем на 50%."""
     while True:
-        await asyncio.sleep(300)   # каждые 5 минут
+        await asyncio.sleep(300)
         if psutil.virtual_memory().percent > 50:
             gc.collect()
             logger.info("Принудительная очистка памяти")
 
 async def check_all_tokens(app):
-    """Удаляет токены, чей срок жизни истёк."""
     now = time.time()
     changed = False
     for uid, data in list(user_tokens.items()):
@@ -1770,7 +1557,6 @@ async def check_all_tokens(app):
 # ======================================================================
 
 async def post_init(app):
-    """Настраивает глобальные объекты и запускает фоновые задачи после старта."""
     global download_semaphore, download_queue, worker_task, token_checker_task, memory_cleaner_task
     download_semaphore = asyncio.Semaphore(1)
     download_queue = asyncio.Queue()
@@ -1790,7 +1576,6 @@ async def post_init(app):
 
 
 def main():
-    """Точка входа: создание приложения, регистрация хендлеров, запуск polling."""
     global worker_task, token_checker_task, memory_cleaner_task
     cleanup_old_tmp_dirs()
     if not os.path.exists(STATS_FILE):
@@ -1799,11 +1584,9 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
-    # Inline-кнопки
     app.add_handler(CallbackQueryHandler(restart_stuck_task_callback, pattern="restart_stuck_task"))
     app.add_handler(CallbackQueryHandler(cancel_download_callback, pattern="cancel_download"))
 
-    # ConversationHandler (состояния авторизации и получения ссылок)
     conv = ConversationHandler(
         entry_points=[
             CommandHandler('start', start),
