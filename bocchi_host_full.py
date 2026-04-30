@@ -446,7 +446,7 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
                 # Очищаем черновик
-                await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="🌸")
+                await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="⏳ Ожидаю новое сообщение")
             except Exception:
                 pass
             return msg
@@ -495,7 +495,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=old_draft['chat_id'], text="⏹️ Предыдущий запрос статуса прерван новым.")
             # Очищаем старый черновик
-            await context.bot.send_message_draft(chat_id=old_draft['chat_id'], draft_id=old_draft['draft_id'], text="🌸")
+            await context.bot.send_message_draft(chat_id=old_draft['chat_id'], draft_id=old_draft['draft_id'], text="⏹️ Статус прерван")
         except Exception as e:
             logger.warning(f"Не удалось закрыть старый черновик: {e}")
         context.user_data.pop('status_draft', None)
@@ -591,7 +591,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при обновлении статуса. Попробуй позже.")
                         # Очищаем черновик даже при ошибке
                         try:
-                            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="🌸")
+                            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="📊 Статус завершён")
                         except:
                             pass
                         context.user_data.pop('status_draft', None)
@@ -602,7 +602,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         # Гарантированно очищаем черновик
         try:
-            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="🌸")
+            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="📊 Статус завершён")
         except Exception as e:
             logger.warning(f"Не удалось очистить черновик статуса: {e}")
         context.user_data.pop('status_draft', None)
