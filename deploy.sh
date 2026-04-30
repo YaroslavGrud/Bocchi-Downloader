@@ -15,7 +15,7 @@ REPO_URL="https://github.com/YaroslavGrud/Bocchi-Downloader.git"
 BRANCH="Yaroslav_grud"
 
 echo -e "${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║        🚀 BOCCHI DOWNLOADER — АВТО-УСТАНОВКА         ║${NC}"
+echo -e "${GREEN}        🚀 BOCCHI DOWNLOADER — АВТО-УСТАНОВКА         ${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
 
 # 1. Проверка наличия Docker
