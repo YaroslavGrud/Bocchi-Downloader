@@ -1,8 +1,7 @@
 # (c) 2026 Hanako
 # Bocchi Downloader (Server Edition)
 # Оптимизированная версия для Ubuntu 20.04 / 2ГБ RAM / 25ГБ диска
-# Все данные в папке data/
-# Добавлена команда /status
+# Анимации приведены к логике bocchi_bot_host.py
 
 import asyncio
 import aiohttp
@@ -262,157 +261,126 @@ def get_formatted_stats():
     except:
         return "0 Б"
 
-# ===================== КОМАНДА СТАТУСА (с анимацией, без VPN и температуры) =====================
+# ===================== АНИМИРОВАННАЯ ОТПРАВКА (как в хосте) =====================
+async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
+    """Отправляет сообщение с лёгкой анимацией (черновик → пауза → сообщение)."""
+    draft_id = int(time.time() * 1000) + random.randint(1, 10000)
+    for attempt in range(max_retries):
+        try:
+            await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
+            await asyncio.sleep(delay)
+            msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            try:
+                await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
+            except Exception:
+                pass
+            return msg
+        except Exception as e:
+            logger.warning(f"Анимация {attempt+1}: {e}")
+            if attempt == max_retries - 1:
+                return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            await asyncio.sleep(0.5 * (attempt + 1))
+    return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_animated_message(
+        context.bot, update.effective_chat.id,
+        "🎸 Главное меню:",
+        reply_markup=main_markup
+    )
+
+async def show_main_menu_from_chat(bot, chat_id):
+    await send_animated_message(
+        bot, chat_id,
+        "🎸 Главное меню:",
+        reply_markup=main_markup
+    )
+
+async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if is_message_too_old(update):
+        return
+    current = get_user_quality(context)
+    await update.message.reply_text(
+        f"🎵 Текущее качество: *{QUALITY_NAMES[current]}*\n\n"
+        f"Выберите новое качество кнопками ниже:",
+        parse_mode='Markdown',
+        reply_markup=quality_markup
+    )
+
+# ===================== КОМАНДА СТАТУСА (лёгкая анимация) =====================
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает состояние сервера с живой анимацией (без VPN и температуры)."""
+    """Показывает состояние сервера через send_animated_message (без долгого цикла)."""
     if is_message_too_old(update):
         return
     chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
 
-    # Закрываем старый черновик, если был
-    old_draft = context.user_data.get('status_draft')
-    if old_draft:
+    cpu = psutil.cpu_percent()
+    mem = psutil.virtual_memory()
+    net_signal = get_network_signal()
+    ping_ms = get_ping()
+    queue_size = active_tasks_count
+
+    # Человеческое описание CPU
+    if cpu < 15:
+        c_status = "тихим ожиданием новых задач"
+    elif cpu < 45:
+        c_status = "активной проверкой твоих ссылок"
+    elif cpu < 80:
+        c_status = "сложными расчетами и очередью"
+    else:
+        c_status = "попытками не сломаться от нагрузки"
+
+    # Память
+    if mem.percent < 30:
+        m_status = "приятной пустотой, мне дышится легко"
+    elif mem.percent < 70:
+        m_status = "самыми важными вещами, всё под рукой"
+    else:
+        m_status = "почти целиком, мне становится тесно"
+
+    # Сеть
+    if "дБм" in net_signal:
         try:
-            await context.bot.send_message(
-                chat_id=old_draft['chat_id'],
-                text="⏹️ Предыдущий запрос статуса прерван новым."
-            )
-        except Exception as e:
-            logger.warning(f"Не удалось закрыть старый черновик: {e}")
-        context.user_data.pop('status_draft', None)
+            dbm = int(re.search(r'(-\d+)', net_signal).group(1))
+            if dbm >= -50:
+                n_lvl = "сейчас просто идеальная"
+            elif dbm >= -70:
+                n_lvl = "вполне стабильная"
+            elif dbm >= -85:
+                n_lvl = "стала какой-то слабой"
+            else:
+                n_lvl = "почти совсем пропала..."
+        except:
+            n_lvl = "вроде бы держится"
+    elif "Eth" in net_signal or "кабель" in net_signal.lower():
+        n_lvl = "подключена по проводам, тут всё надёжно"
+    else:
+        n_lvl = "ведет себя странно, я не понимаю сигнал"
 
-    draft_id = int(time.time() * 1000) + user_id
+    # Очередь
+    if queue_size == 0:
+        queue_text = "• Сейчас я свободна, жду новых ссылок 🎸"
+    elif queue_size == 1:
+        queue_text = f"• Сейчас меня ждёт {get_plural_tracks(queue_size)}"
+    else:
+        queue_text = f"• Сейчас меня ждут {get_plural_tracks(queue_size)}"
 
-    # Пытаемся создать черновик
-    try:
-        await context.bot.send_message_draft(
-            chat_id=chat_id,
-            draft_id=draft_id,
-            text="🌸 Секретный блокнот Хитори 🎸\n\nПодожди, собираю данные..."
-        )
-        context.user_data['status_draft'] = {'draft_id': draft_id, 'chat_id': chat_id}
-    except Exception as e:
-        logger.error(f"Ошибка запуска черновика: {e}")
-        await send_animated_message(
-            context.bot, chat_id,
-            "❌ Не удалось отобразить анимацию статуса. Попробуй позже."
-        )
-        return
+    stats_display = get_formatted_stats()
 
-    steps = 10
-    anim_frames = ["🎸", "🎧", "🌸", "🎵"]
-    for step in range(1, steps + 1):
-        cpu = psutil.cpu_percent()
-        mem = psutil.virtual_memory()
+    status_text = (
+        "🌸 Секретный блокнот Хитори 🎸\n\n"
+        f"• Мои мысли заняты {c_status} ({cpu}%)\n"
+        f"• Моя память заполнена {m_status} ({mem.percent}%)\n\n"
+        f"🌐 Связь с миром:\n"
+        f"• Моя сеть: {n_lvl} ({net_signal})\n"
+        f"• Скорость отклика: {ping_ms} мс к серверам Яндекса\n\n"
+        f"📥 Очередь и загрузки:\n"
+        f"{queue_text}\n"
+        f"• Всего с запуска я нашла треков на целых {stats_display}\n\n"
+        f"🎸 Всё работает, я стараюсь!"
+    )
 
-        # CPU
-        if cpu < 15:
-            c_status = "тихим ожиданием новых задач"
-        elif cpu < 45:
-            c_status = "активной проверкой твоих ссылок"
-        elif cpu < 80:
-            c_status = "сложными расчетами и очередью"
-        else:
-            c_status = "попытками не сломаться от нагрузки"
-
-        # Память
-        if mem.percent < 30:
-            m_status = "приятной пустотой, мне дышится легко"
-        elif mem.percent < 70:
-            m_status = "самыми важными вещами, всё под рукой"
-        else:
-            m_status = "почти целиком, мне становится тесно"
-
-        # Сеть
-        net_signal = get_network_signal()
-        if "дБм" in net_signal:
-            try:
-                dbm = int(re.search(r'(-\d+)', net_signal).group(1))
-                if dbm >= -50:
-                    n_lvl = "сейчас просто идеальная"
-                elif dbm >= -70:
-                    n_lvl = "вполне стабильная"
-                elif dbm >= -85:
-                    n_lvl = "стала какой-то слабой"
-                else:
-                    n_lvl = "почти совсем пропала..."
-            except:
-                n_lvl = "вроде бы держится"
-        elif "Eth" in net_signal or "кабель" in net_signal.lower():
-            n_lvl = "подключена по проводам, тут всё надёжно"
-        else:
-            n_lvl = "ведет себя странно, я не понимаю сигнал"
-
-        ping_ms = get_ping()
-
-        # Очередь
-        queue_size = active_tasks_count
-        if queue_size == 0:
-            queue_text = "• Сейчас я свободна, жду новых ссылок 🎸"
-        elif queue_size == 1:
-            queue_text = f"• Сейчас меня ждёт {get_plural_tracks(queue_size)}"
-        else:
-            queue_text = f"• Сейчас меня ждут {get_plural_tracks(queue_size)}"
-
-        stats_text = get_formatted_stats()
-
-        # Блоки UI (без температуры)
-        res_block = (
-            "Моё самочувствие 🌸\n"
-            f"• Мои мысли заняты {c_status} ({cpu}%)\n"
-            f"• Моя память заполнена {m_status} ({mem.percent}%)\n\n"
-        )
-        net_block = (
-            "Связь с миром 🌐\n"
-            f"• Моя сеть: {n_lvl} ({net_signal})\n"
-            f"• Скорость отклика: {ping_ms} мс к серверам Яндекса\n\n"
-        )
-        work_block = (
-            "Очередь и загрузки 📥\n"
-            f"{queue_text}\n"
-            f"• Всего с запуска я нашла треков на целых {stats_text}\n\n"
-        )
-
-        live_thoughts = [
-            "Так... вроде всё крутится, ничего не задымилось...",
-            "Ой, а это что за цифра? Надеюсь, это не важно...",
-            "Вентилятор так шумит... тебе не мешает?",
-            "Стараюсь записывать всё-всё до единой циферки...",
-            "Хух, кажется, я справляюсь... пока что..."
-        ]
-        footer = f"⏱ Побуду с тобой еще {steps - step} сек...\n{random.choice(live_thoughts)}"
-        anim = anim_frames[step % len(anim_frames)]
-
-        status_text = f"🌸 Секретный блокнот Хитори 🎸\n\n{res_block}{net_block}{work_block}{footer}\n\n{anim}"
-
-        for retry in range(2):
-            try:
-                await context.bot.send_message_draft(
-                    chat_id=chat_id, draft_id=draft_id, text=status_text
-                )
-                break
-            except Exception as e:
-                logger.warning(f"Ошибка обновления черновика (шаг {step}, попытка {retry+1}): {e}")
-                if retry == 1:
-                    await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при обновлении статуса. Попробуй позже.")
-                    try:
-                        await context.bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-                    except:
-                        pass
-                    context.user_data.pop('status_draft', None)
-                    return
-                await asyncio.sleep(0.5)
-        await asyncio.sleep(2)
-
-    # Финальное удаление черновика
-    try:
-        await context.bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-    except Exception as e:
-        logger.warning(f"Не удалось удалить черновик статуса: {e}")
-
-    context.user_data.pop('status_draft', None)
-    await show_main_menu(update, context)
+    await send_animated_message(context.bot, chat_id, status_text)
 
 # ===================== РАБОТА С ОБЛОЖКАМИ (без изменений) =====================
 async def fetch_cover_from_yandex(cover_uri: str) -> bytes | None:
@@ -582,63 +550,6 @@ def parse_yandex_url(url: str):
             return ('playlist', kinds, owner)
 
     return (None, None, None)
-
-# ===================== АНИМИРОВАННАЯ ОТПРАВКА (исправленная) =====================
-async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
-    draft_id = int(time.time() * 1000) + random.randint(1, 10000)
-    for attempt in range(max_retries):
-        try:
-            await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
-            await asyncio.sleep(delay)
-            msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            try:
-                await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-            except Exception:
-                # Если удалить не удалось, просто игнорируем, не создаём новый черновик
-                pass
-            return msg
-        except Exception as e:
-            logger.warning(f"Попытка {attempt+1}/{max_retries} анимации не удалась: {e}")
-            if attempt == max_retries - 1:
-                logger.warning(f"send_animated_message fallback после {max_retries} попыток")
-                # Перед fallback-сообщением пытаемся удалить возможный оставшийся черновик
-                try:
-                    await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-                except:
-                    pass
-                return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            await asyncio.sleep(0.5 * (attempt + 1))
-    # Сюда не должны попадать, но на всякий случай
-    try:
-        await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-    except:
-        pass
-    return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_animated_message(
-        context.bot, update.effective_chat.id,
-        "🎸 Главное меню:",
-        reply_markup=main_markup
-    )
-
-async def show_main_menu_from_chat(bot, chat_id):
-    await send_animated_message(
-        bot, chat_id,
-        "🎸 Главное меню:",
-        reply_markup=main_markup
-    )
-
-async def cmd_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if is_message_too_old(update):
-        return
-    current = get_user_quality(context)
-    await update.message.reply_text(
-        f"🎵 Текущее качество: *{QUALITY_NAMES[current]}*\n\n"
-        f"Выберите новое качество кнопками ниже:",
-        parse_mode='Markdown',
-        reply_markup=quality_markup
-    )
 
 # ===================== ХЕНДЛЕРЫ АВТОРИЗАЦИИ =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1245,7 +1156,6 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                 batch_info = {'name': album_title, 'artist': album_artist}
 
             elif content_type in ('playlist', 'uuid_playlist', 'iframe_playlist'):
-                # Прямой HTTP-запрос к API для надёжной работы с UUID
                 headers = {"Authorization": f"OAuth {token}"}
                 api_url = f"https://api.music.yandex.net/playlist/{content_id}"
                 async with aiohttp.ClientSession() as session:
@@ -1945,7 +1855,6 @@ async def cleanup_orphan_messages(app):
 def main():
     global worker_task, token_checker_task
     try:
-        # Ограничение логов
         logging.getLogger("telegram").setLevel(logging.WARNING)
         logging.getLogger("httpx").setLevel(logging.ERROR)
 
