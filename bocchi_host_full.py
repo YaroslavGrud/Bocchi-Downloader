@@ -445,8 +445,8 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             await asyncio.sleep(delay)
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
-                # Очищаем черновик zero‑width space’ом
-                await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="\u200b")
+                # Очищаем черновик
+                await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="🌸")
             except Exception:
                 pass
             return msg
@@ -495,7 +495,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=old_draft['chat_id'], text="⏹️ Предыдущий запрос статуса прерван новым.")
             # Очищаем старый черновик
-            await context.bot.send_message_draft(chat_id=old_draft['chat_id'], draft_id=old_draft['draft_id'], text="\u200b")
+            await context.bot.send_message_draft(chat_id=old_draft['chat_id'], draft_id=old_draft['draft_id'], text="🌸")
         except Exception as e:
             logger.warning(f"Не удалось закрыть старый черновик: {e}")
         context.user_data.pop('status_draft', None)
@@ -591,7 +591,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при обновлении статуса. Попробуй позже.")
                         # Очищаем черновик даже при ошибке
                         try:
-                            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="\u200b")
+                            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="🌸")
                         except:
                             pass
                         context.user_data.pop('status_draft', None)
@@ -600,9 +600,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await asyncio.sleep(0.5)
             await asyncio.sleep(2)
     finally:
-        # Гарантированно очищаем черновик невидимым символом
+        # Гарантированно очищаем черновик
         try:
-            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="\u200b")
+            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="🌸")
         except Exception as e:
             logger.warning(f"Не удалось очистить черновик статуса: {e}")
         context.user_data.pop('status_draft', None)
