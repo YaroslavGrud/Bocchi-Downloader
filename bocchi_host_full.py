@@ -1,6 +1,6 @@
 # (c) 2026 Hanako
 # Bocchi Downloader (Server Edition)
-# Релиз‑кандидат (исправления: отмена, статус, память, пинг)
+# Релиз‑кандидат (исправления: отмена, статус, память, пинг, антиспам)
 
 import asyncio
 import aiohttp
@@ -67,6 +67,9 @@ ACTIVE_MSGS_FILE = "data/active_status_msgs.json"
 PENDING_TASKS_FILE = "data/pending_tasks.json"
 
 BOT_START_TIME = time.time()
+ANTI_SPAM_DELAY = 5.0                     # минимальный интервал между сообщениями (сек)
+last_user_message_time = {}               # user_id -> timestamp последнего обработанного сообщения
+last_spam_warning = {}                    # user_id -> timestamp последнего предупреждения о спаме
 
 # --- ГЛОБАЛЬНЫЕ ОБЪЕКТЫ ---
 download_semaphore = None
@@ -445,7 +448,6 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             await asyncio.sleep(delay)
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
-                # Очищаем черновик
                 await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="⏳ Ожидаю новое сообщение")
             except Exception:
                 pass
@@ -489,12 +491,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
 
-    # Закрываем предыдущий черновик, если был
+    # Закрываем предыдущий черновик, если был (только очистка, без отдельного сообщения)
     old_draft = context.user_data.get('status_draft')
     if old_draft:
         try:
-            await context.bot.send_message(chat_id=old_draft['chat_id'], text="⏹️ Предыдущий запрос статуса прерван новым.")
-            # Очищаем старый черновик
             await context.bot.send_message_draft(chat_id=old_draft['chat_id'], draft_id=old_draft['draft_id'], text="⏹️ Статус прерван")
         except Exception as e:
             logger.warning(f"Не удалось закрыть старый черновик: {e}")
@@ -514,7 +514,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         steps = 8
-        # Можно заменить на "" если не нужны эмодзи в конце каждой строки
         anim_frames = ["🎸", "🎧", "🌸", "🎵"]
         for step in range(1, steps + 1):
             cpu = psutil.cpu_percent()
@@ -580,7 +579,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             anim = anim_frames[step % len(anim_frames)]
             status_text = f"🌸 Секретный блокнот Хитори 🎸\n\n{res_block}{net_text}{work_block}{footer}\n\n{anim}"
 
-            # Обновление черновика (2 попытки)
             for retry in range(2):
                 try:
                     await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=status_text)
@@ -589,7 +587,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Ошибка обновления черновика (шаг {step}, попытка {retry+1}): {e}")
                     if retry == 1:
                         await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при обновлении статуса. Попробуй позже.")
-                        # Очищаем черновик даже при ошибке
                         try:
                             await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="📊 Статус завершён")
                         except:
@@ -600,7 +597,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await asyncio.sleep(0.5)
             await asyncio.sleep(2)
     finally:
-        # Гарантированно очищаем черновик
         try:
             await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="📊 Статус завершён")
         except Exception as e:
@@ -608,6 +604,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop('status_draft', None)
 
     await show_main_menu(update, context)
+
 # ===================== ХЕНДЛЕРЫ АВТОРИЗАЦИИ =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
@@ -781,7 +778,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    # Собираем задачи текущего пользователя
     tasks_to_cancel = []
     for task_id, info in list(current_task_info.items()):
         if info['chat_id'] == chat_id:
@@ -805,7 +801,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
         batch_index = task.get('batch_index', 0)
         batch_total = task.get('batch_total', 0)
 
-        # Формируем полное описание
         if batch_type == 'album':
             desc = f"альбома «{batch_name}» (трек {batch_index} из {batch_total})"
         elif batch_type == 'playlist':
@@ -825,7 +820,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                 await proc.wait()
             except:
                 pass
-        # Удаляем статусное сообщение
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             try:
@@ -835,7 +829,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
         current_task_info.pop(task_id, None)
         cancelled_count += 1
 
-    # Удаляем задачи этого пользователя из очереди и обновляем счётчик
     remaining_tasks = []
     removed_from_queue = 0
     while not download_queue.empty():
@@ -850,7 +843,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
     for t in remaining_tasks:
         await download_queue.put(t)
 
-    # Корректируем глобальный счётчик активных задач
     global active_tasks_count
     active_tasks_count -= (cancelled_count + removed_from_queue)
     if active_tasks_count < 0:
@@ -873,7 +865,6 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text("🛑 Экстренная остановка… Убиваю процессы и чищу очередь.")
 
-    # Убиваем все текущие процессы
     for task_id, info in list(current_task_info.items()):
         proc = info.get('process')
         if proc and not proc.returncode:
@@ -890,7 +881,6 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
     current_task_info.clear()
 
-    # Очищаем очередь
     while not download_queue.empty():
         try:
             download_queue.get_nowait()
@@ -938,15 +928,35 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
     task = stuck_info['task']
     await download_queue.put(task)
     global active_tasks_count
-    active_tasks_count += 1  # вернули задачу в очередь
+    active_tasks_count += 1
     await query.edit_message_text(f"🔄 Задача «{task['track_name']}» перезапущена. Продолжаю загрузку…")
     logger.info(f"Задача {stuck_task_id} перезапущена пользователем")
 
-# ===================== ОБРАБОТЧИК СООБЩЕНИЙ =====================
+# ===================== ОБРАБОТЧИК СООБЩЕНИЙ (С АНТИСПАМОМ) =====================
 async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    now = time.time()
+
+    # --- АНТИСПАМ: не чаще одного сообщения за ANTI_SPAM_DELAY секунд ---
+    last_time = last_user_message_time.get(user_id, 0)
+    if now - last_time < ANTI_SPAM_DELAY:
+        try:
+            await update.message.delete()
+        except:
+            pass
+        last_warn = last_spam_warning.get(user_id, 0)
+        if now - last_warn > 5:
+            last_spam_warning[user_id] = now
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⏳ Пожалуйста, не так быстро… Подожди немного перед следующим действием."
+            )
+        return WAITING_FOR_LINK
+    last_user_message_time[user_id] = now
+
     msg_id = update.message.message_id
     if last_processed_msg.get(user_id) == msg_id:
         return WAITING_FOR_LINK
@@ -957,7 +967,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await check_session(update, context)
     if text == "▶ Начать загрузку":
         await send_animated_message(
-            context.bot, update.effective_chat.id,
+            context.bot, chat_id,
             "🎵 Присылай ссылки на треки, альбомы или плейлисты. Я постараюсь всё скачать…"
         )
         return WAITING_FOR_LINK
@@ -966,7 +976,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_LINK
     if text == "🔄 Обновить токен":
         await send_animated_message(
-            context.bot, update.effective_chat.id,
+            context.bot, chat_id,
             "🔑 Пожалуйста, отправь новый токен."
         )
         return WAITING_FOR_TOKEN
@@ -995,7 +1005,6 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Не получилось сменить качество…")
         return WAITING_FOR_LINK
 
-    chat_id = update.effective_chat.id
     message = update.message
 
     # Попытка извлечь ссылку из HTML-кода
@@ -1917,7 +1926,7 @@ async def worker_loop(app):
 # --- ФОНОВАЯ ОЧИСТКА ПАМЯТИ ---
 async def memory_cleaner():
     while True:
-        await asyncio.sleep(300)  # каждые 5 минут
+        await asyncio.sleep(300)          # каждые 5 минут
         mem = psutil.virtual_memory()
         if mem.percent > 50:
             gc.collect()
