@@ -1,6 +1,8 @@
 # (c) 2026 Hanako
 # Bocchi Downloader (Server Edition)
-# Релиз‑кандидат
+
+# Версия работает нестабильно
+# Отправляется пустой блок вместе с анимированным сообщением 
 
 import asyncio
 import aiohttp
