@@ -102,6 +102,7 @@ QUALITY_BUTTONS = {"Низкое": 0, "Среднее": 1, "Высокое": 2}
 quality_keyboard = [[KeyboardButton("Низкое"), KeyboardButton("Среднее"), KeyboardButton("Высокое")]]
 quality_markup = ReplyKeyboardMarkup(quality_keyboard, resize_keyboard=True, one_time_keyboard=True)
 
+# Главное меню: кнопки "Статус" и "Отменить загрузку" поменяны местами
 main_menu_keyboard = [
     ["▶ Начать загрузку", "⏹ Отменить загрузку"],
     ["🔓 Удалить токен", "🔄 Обновить токен"],
@@ -389,7 +390,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         ping_ms = get_ping()
 
-        # Очередь
+        # Очередь (только чтение глобальной переменной, global не нужен)
         queue_size = active_tasks_count
         if queue_size == 0:
             queue_text = "• Сейчас я свободна, жду новых ссылок"
@@ -957,7 +958,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
-    # Обработка команд из главного меню
+    # Обработка команд из главного меню (с учётом изменённого порядка кнопок)
     if text == "🔑 Начать работу":
         return await check_session(update, context)
     if text == "▶ Начать загрузку":
@@ -966,8 +967,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📥 Присылай ссылки на треки, альбомы или плейлисты. Я постараюсь всё скачать..."
         )
         return WAITING_FOR_LINK
-    if text == "📊 Статус":
-        await cmd_status(update, context)
+    if text == "⏹ Отменить загрузку":
+        await cancel_download(update, context, is_callback=False)
         return WAITING_FOR_LINK
     if text == "🔓 Удалить токен":
         await cmd_logout(update, context)
@@ -981,8 +982,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "🎵 Качество":
         await cmd_quality(update, context)
         return WAITING_FOR_LINK
-    if text == "⏹ Отменить загрузку":
-        await cancel_download(update, context, is_callback=False)
+    if text == "📊 Статус":
+        await cmd_status(update, context)
         return WAITING_FOR_LINK
     if text == "🆘 Экстренная остановка":
         await emergency_stop(update, context)
@@ -1134,6 +1135,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ССЫЛОК (ПАКЕТНАЯ) ==================
 async def process_accumulated_links(user_id, chat_id, context, token):
+    global active_tasks_count
     user_processing[user_id] = True
     user_delay_tasks.pop(user_id, None)
     await asyncio.sleep(ACCUMULATION_DELAY)
@@ -1360,7 +1362,6 @@ async def process_accumulated_links(user_id, chat_id, context, token):
         }
         await download_queue.put(task_item)
 
-    global active_tasks_count
     active_tasks_count += total_tracks
     save_queue_state()
 
@@ -1959,11 +1960,11 @@ def main():
                 CommandHandler('start', start),
                 MessageHandler(filters.Regex("^🔑 Начать работу$"), handle_download),
                 MessageHandler(filters.Regex("^▶ Начать загрузку$"), handle_download),
-                MessageHandler(filters.Regex("^📊 Статус$"), handle_download),
+                MessageHandler(filters.Regex("^⏹ Отменить загрузку$"), handle_download),
                 MessageHandler(filters.Regex("^🔓 Удалить токен$"), handle_download),
                 MessageHandler(filters.Regex("^🔄 Обновить токен$"), handle_download),
                 MessageHandler(filters.Regex("^🎵 Качество$"), handle_download),
-                MessageHandler(filters.Regex("^⏹ Отменить загрузку$"), handle_download),
+                MessageHandler(filters.Regex("^📊 Статус$"), handle_download),
                 MessageHandler(filters.Regex("^🆘 Экстренная остановка$"), handle_download),
             ],
             states={
