@@ -1,7 +1,7 @@
 # (c) 2026 Hanako
 # Bocchi Downloader (Server Edition)
-# Полная версия со всеми исправлениями (NameError, sendMessageDraft и др.)
-# Работает с python-telegram-bot 21.6 и выше.
+# Полная версия со всеми исправлениями (NameError, sendMessageDraft, отмена загрузки, логи).
+# Работает с python-telegram-bot 21.6
 
 import asyncio
 import aiohttp
@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 import io
 import gc
+import contextlib
 
 import psutil
 from catboxpy import AsyncCatboxClient, LitterboxClient
@@ -119,10 +120,10 @@ main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
 
 
 # ======================================================================
-# ФУНКЦИЯ ДЛЯ ОТПРАВКИ sendMessageDraft (реализована через bot._post)
+# ФУНКЦИЯ ДЛЯ ОТПРАВКИ sendMessageDraft (реализована через _post)
 # ======================================================================
 async def _send_message_draft(bot, chat_id, draft_id, text):
-    """Отправляет черновик с эффектом «печати» (streaming), используя метод sendMessageDraft."""
+    """Отправляет черновик сообщения с эффектом «печати» (streaming), используя метод sendMessageDraft."""
     try:
         await bot._post(
             "sendMessageDraft",
@@ -250,7 +251,6 @@ def is_message_too_old(update: Update) -> bool:
     return update.message and update.message.date.timestamp() < BOT_START_TIME
 
 def is_token_valid(context: ContextTypes.DEFAULT_TYPE) -> bool:
-    # В версии 21.6 _user_id всё ещё доступен (приватный атрибут, но рабочий)
     return is_token_valid_by_id(context._user_id)
 
 def get_plural_tracks(n: int) -> str:
@@ -391,7 +391,7 @@ def set_user_quality(context: ContextTypes.DEFAULT_TYPE, quality: int) -> bool:
 
 
 # ======================================================================
-# ПАРСИНГ ССЫЛОК ЯНДЕКС.МУЗЫКИ (urlparse и parse_qs используются смело!)
+# ПАРСИНГ ССЫЛОК ЯНДЕКС.МУЗЫКИ
 # ======================================================================
 
 def extract_base_url(url: str) -> str:
@@ -690,63 +690,71 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ======================================================================
-# ОТМЕНА ЗАГРУЗКИ
+# БЕЗОПАСНОЕ РЕДАКТИРОВАНИЕ CALLBACK-СООБЩЕНИЙ
+# ======================================================================
+async def _safe_edit_callback(update, text):
+    """Безопасно пытается отредактировать сообщение из callback_query.
+    При неудаче просто логирует факт и ничего не делает."""
+    try:
+        await update.callback_query.edit_message_text(text)
+    except Exception as e:
+        logger.info(f"Не удалось отредактировать сообщение (вероятно, уже удалено): {e}")
+
+
+# ======================================================================
+# ОТМЕНА ЗАГРУЗКИ (ПОЛНОСТЬЮ ИСПРАВЛЕНА)
 # ======================================================================
 
 async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
+    """
+    Отменяет все текущие загрузки пользователя в чате.
+    Не редактирует потенциально удалённые статусные сообщения,
+    а отправляет новое уведомление. Логирует только факт отмены.
+    """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    tasks_to_cancel = [(tid, info) for tid, info in current_task_info.items() if info['chat_id'] == chat_id]
+    # Собираем задачи этого чата
+    tasks_to_cancel = [(tid, info) for tid, info in current_task_info.items() if info.get('chat_id') == chat_id]
 
     if not tasks_to_cancel:
-        msg = "❌ Нет активных задач для отмены…"
+        msg = "❌ Нет активных задач для отмены."
         if is_callback:
-            await update.callback_query.edit_message_text(msg)
+            await _safe_edit_callback(update, msg)
         else:
-            await update.message.reply_text(msg)
+            with contextlib.suppress(Exception):
+                await update.message.reply_text(msg)
         return
+
+    # Отправляем короткое уведомление (новое сообщение, не редактирование старого)
+    notify_text = "🛑 Отменяю загрузку…"
+    if is_callback:
+        await update.callback_query.answer()
+        await context.bot.send_message(chat_id, notify_text)
+    else:
+        with contextlib.suppress(Exception):
+            await update.message.reply_text(notify_text)
 
     cancelled_count = 0
     for task_id, info in tasks_to_cancel:
         proc = info.get('process')
-        task = info['task']
-        track_name = task.get('track_name', 'Неизвестный трек')
-        batch_type = task.get('batch_type', '')
-        batch_name = task.get('batch_name', '')
-        batch_idx = task.get('batch_index', 0)
-        batch_total = task.get('batch_total', 0)
-
-        if batch_type == 'album':
-            desc = f"альбома «{batch_name}» (трек {batch_idx} из {batch_total})"
-        elif batch_type == 'playlist':
-            desc = f"плейлиста «{batch_name}» (трек {batch_idx} из {batch_total})"
-        else:
-            desc = "загрузки"
-
-        cancel_msg = f"🛑 Отменяю загрузку {desc}. Обрабатывается трек: {track_name}..."
-        if is_callback:
-            await update.callback_query.edit_message_text(cancel_msg)
-        else:
-            await update.message.reply_text(cancel_msg)
-
         if proc and not proc.returncode:
             try:
                 proc.kill()
                 await proc.wait()
-            except:
+            except Exception:
                 pass
 
+        # Удаляем статусное сообщение, если ещё живо
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
-            try:
+            with contextlib.suppress(Exception):
                 await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except:
-                pass
 
         current_task_info.pop(task_id, None)
         cancelled_count += 1
 
+    # Убираем оставшиеся задачи пользователя из очереди
     remaining = []
     removed_from_queue = 0
     while not download_queue.empty():
@@ -761,22 +769,24 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
     for t in remaining:
         await download_queue.put(t)
 
+    # Обновляем счётчик
     global active_tasks_count
     active_tasks_count -= (cancelled_count + removed_from_queue)
     if active_tasks_count < 0:
         active_tasks_count = 0
 
     save_queue_state()
+
     total = cancelled_count + removed_from_queue
-    msg = f"✅ Загрузка отменена. Отменено задач: {total}."
-    if is_callback:
-        await update.callback_query.edit_message_text(msg)
-    else:
-        await update.message.reply_text(msg)
+    result_msg = f"✅ Загрузка отменена. Отменено задач: {total}."
+    await context.bot.send_message(chat_id, result_msg)
+
+    logger.info(f"Отмена загрузки в чате {chat_id}: отменено {cancelled_count} активных, убрано из очереди {removed_from_queue}")
 
     await show_main_menu_from_chat(context.bot, chat_id)
 
 async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик inline-кнопки отмены загрузки."""
     await cancel_download(update, context, is_callback=True)
 
 
@@ -1218,7 +1228,7 @@ def load_queue_state():
 
 
 # ======================================================================
-# ВОРКЕР (СКАЧИВАНИЕ, ОБРАБОТКА ТЕГОВ, ОТПРАВКА)
+# ВОРКЕР (СКАЧИВАНИЕ, ОБРАБОТКА ТЕГОВ, ОТПРАВКА) – ИСПРАВЛЕН KeyError
 # ======================================================================
 
 async def worker_loop(app):
@@ -1321,7 +1331,14 @@ async def worker_loop(app):
                             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                         )
                         downloader_process = proc
-                        current_task_info[task_id]['process'] = proc
+                        # === ИСПРАВЛЕНИЕ KeyError ===
+                        if task_id in current_task_info:
+                            current_task_info[task_id]['process'] = proc
+                        else:
+                            # Задача была отменена, убиваем процесс сразу
+                            proc.kill()
+                            await proc.wait()
+                            return -1, b'', b'Cancelled'
                         try:
                             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=DOWNLOAD_TIMEOUT)
                             return proc.returncode, stdout, stderr
@@ -1510,7 +1527,7 @@ async def worker_loop(app):
                         await app.bot.send_message(chat_id, finish, reply_markup=main_markup)
 
                 except Exception as e:
-                    logger.error(f"Ошибка воркера: {e}", exc_info=True)
+                    logger.info(f"Задача прервана (отмена или ошибка): {task.get('track_name', '')} | {e}")
                     await app.bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:200]}")
                 finally:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
