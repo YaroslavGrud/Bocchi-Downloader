@@ -444,9 +444,9 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
             await asyncio.sleep(delay)
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            # Очищаем черновик пустым сообщением
             try:
-                await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=" ")
+                # Очищаем черновик zero‑width space’ом
+                await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="\u200b")
             except Exception:
                 pass
             return msg
@@ -494,13 +494,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if old_draft:
         try:
             await context.bot.send_message(chat_id=old_draft['chat_id'], text="⏹️ Предыдущий запрос статуса прерван новым.")
-            await context.bot.send_message_draft(chat_id=old_draft['chat_id'], draft_id=old_draft['draft_id'], text=" ")
+            # Очищаем старый черновик
+            await context.bot.send_message_draft(chat_id=old_draft['chat_id'], draft_id=old_draft['draft_id'], text="\u200b")
         except Exception as e:
             logger.warning(f"Не удалось закрыть старый черновик: {e}")
         context.user_data.pop('status_draft', None)
 
     draft_id = int(time.time() * 1000) + user_id
 
+    # Пытаемся создать начальный черновик
     try:
         await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="🌸 Секретный блокнот Хитори 🎸\n\nПодожди, собираю данные...")
         context.user_data['status_draft'] = {'draft_id': draft_id, 'chat_id': chat_id}
@@ -512,7 +514,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         steps = 8
-        anim_frames = ["🎸", "🎧", "🌸", "🎵"]   # или пустые строки, если убираем эмодзи
+        # Можно заменить на "" если не нужны эмодзи в конце каждой строки
+        anim_frames = ["🎸", "🎧", "🌸", "🎵"]
         for step in range(1, steps + 1):
             cpu = psutil.cpu_percent()
             mem = psutil.virtual_memory()
@@ -577,6 +580,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             anim = anim_frames[step % len(anim_frames)]
             status_text = f"🌸 Секретный блокнот Хитори 🎸\n\n{res_block}{net_text}{work_block}{footer}\n\n{anim}"
 
+            # Обновление черновика (2 попытки)
             for retry in range(2):
                 try:
                     await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=status_text)
@@ -585,9 +589,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Ошибка обновления черновика (шаг {step}, попытка {retry+1}): {e}")
                     if retry == 1:
                         await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при обновлении статуса. Попробуй позже.")
-                        # Очищаем черновик при ошибке
+                        # Очищаем черновик даже при ошибке
                         try:
-                            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=" ")
+                            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="\u200b")
                         except:
                             pass
                         context.user_data.pop('status_draft', None)
@@ -596,9 +600,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await asyncio.sleep(0.5)
             await asyncio.sleep(2)
     finally:
-        # Вместо удаления отправляем пустой черновик (очистка)
+        # Гарантированно очищаем черновик невидимым символом
         try:
-            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=" ")
+            await context.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text="\u200b")
         except Exception as e:
             logger.warning(f"Не удалось очистить черновик статуса: {e}")
         context.user_data.pop('status_draft', None)
