@@ -1,8 +1,6 @@
 # (c) 2026 Hanako
 # Bocchi Downloader (Server Edition)
-# Полная версия с глобальной экстренной остановкой и кооперативной мягкой отменой.
-# Воркер проверяет флаг emergency_stop_active и немедленно прерывает работу.
-# Все ошибки NameError, sendMessageDraft, KeyError исправлены.
+# Полная версия со всеми исправлениями (NameError, sendMessageDraft, отмена загрузки, логи).
 # Работает с python-telegram-bot 21.6
 
 import asyncio
@@ -41,7 +39,7 @@ from telegram.ext import (
 )
 from yandex_music import ClientAsync
 
-# ---------- ИСПРАВЛЕНИЕ NameError ----------
+# ---------- ИСПРАВЛЕНИЕ NameError: urlparse и parse_qs теперь импортированы ----------
 from urllib.parse import urlparse, parse_qs
 
 # ---------------------- НАСТРОЙКА ЛОГИРОВАНИЯ ----------------------
@@ -100,9 +98,6 @@ active_status_msgs = {}
 pending_tasks = {}
 current_task_info = {}
 
-# Глобальный флаг экстренной остановки
-emergency_stop_active = False
-
 # ---------------------- СОСТОЯНИЯ ДИАЛОГА ----------------------
 WAITING_FOR_TOKEN, WAITING_FOR_LINK = range(2)
 
@@ -125,10 +120,10 @@ main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
 
 
 # ======================================================================
-# ФУНКЦИЯ ДЛЯ ОТПРАВКИ sendMessageDraft (через bot._post)
+# ФУНКЦИЯ ДЛЯ ОТПРАВКИ sendMessageDraft (реализована через bot._post)
 # ======================================================================
 async def _send_message_draft(bot, chat_id, draft_id, text):
-    """Отправляет черновик сообщения с эффектом «печати» (streaming)."""
+    """Отправляет черновик сообщения с эффектом «печати» (streaming), используя метод sendMessageDraft."""
     try:
         await bot._post(
             "sendMessageDraft",
@@ -145,6 +140,7 @@ async def _send_message_draft(bot, chat_id, draft_id, text):
 # ======================================================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С ТОКЕНАМИ
 # ======================================================================
+
 def save_user_tokens():
     try:
         with open(USER_TOKENS_FILE, 'w', encoding='utf-8') as f:
@@ -430,7 +426,7 @@ def parse_yandex_url(url: str):
 
 
 # ======================================================================
-# АНИМИРОВАННАЯ ОТПРАВКА СООБЩЕНИЙ
+# АНИМИРОВАННАЯ ОТПРАВКА СООБЩЕНИЙ (ВКЛЮЧАЯ send_animated_message)
 # ======================================================================
 
 async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
@@ -694,9 +690,11 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ======================================================================
-# БЕЗОПАСНОЕ РЕДАКТИРОВАНИЕ CALLBACK
+# БЕЗОПАСНОЕ РЕДАКТИРОВАНИЕ CALLBACK-СООБЩЕНИЙ
 # ======================================================================
 async def _safe_edit_callback(update, text):
+    """Безопасно пытается отредактировать сообщение из callback_query.
+    При неудаче просто логирует факт и ничего не делает."""
     try:
         await update.callback_query.edit_message_text(text)
     except Exception as e:
@@ -704,18 +702,22 @@ async def _safe_edit_callback(update, text):
 
 
 # ======================================================================
-# МЯГКАЯ ОТМЕНА ЗАГРУЗКИ (кооперативная)
+# ОТМЕНА ЗАГРУЗКИ (МЯГКАЯ)
 # ======================================================================
+
 async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
     """
-    Выставляет флаг cancel_requested для всех активных задач пользователя.
-    Воркер сам отправит последний трек и завершит задачу.
-    Пользователь получает только сообщения об отмене, без ошибок.
+    Отменяет все текущие загрузки пользователя в чате.
+    Если активный трек уже был скачан, он будет отправлен с уведомлением.
+    Сообщения об ошибках ("не удалось скачать", "нехватка памяти") не выводятся.
+    Логирует только факт отмены.
     """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
+    # Собираем задачи этого чата
     tasks_to_cancel = [(tid, info) for tid, info in current_task_info.items() if info.get('chat_id') == chat_id]
+
     if not tasks_to_cancel:
         msg = "❌ Нет активных задач для отмены."
         if is_callback:
@@ -725,7 +727,7 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                 await update.message.reply_text(msg)
         return
 
-    # Уведомление пользователя
+    # Отправляем уведомление о начале отмены
     notify_text = "🛑 Отменяю загрузку…"
     if is_callback:
         await update.callback_query.answer()
@@ -734,14 +736,99 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
         with contextlib.suppress(Exception):
             await update.message.reply_text(notify_text)
 
-    # Взводим флаг для каждой задачи
     cancelled_count = 0
+    last_track_sent = False
+
     for task_id, info in tasks_to_cancel:
-        # Помечаем задачу как отменённую – воркер сам отправит последний трек
-        info['cancel_requested'] = True
+        proc = info.get('process')
+        task = info['task']
+        tmp_dir = info.get('tmp_dir')
+
+        # Убиваем процесс, если жив
+        if proc and not proc.returncode:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+
+        # Пытаемся отправить последний скачанный трек (один раз)
+        if not last_track_sent and tmp_dir and tmp_dir.exists():
+            files = list(tmp_dir.rglob('*.mp3')) + list(tmp_dir.rglob('*.m4a'))
+            if files:
+                f_path = files[0]
+                artist = task.get('artist', 'Неизвестен')
+                title = task.get('title', f_path.stem)
+                safe_name = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
+                final_path = f_path.with_name(safe_name)
+                f_path.rename(final_path)
+
+                # Обложка
+                thumb = None
+                cover_bytes = task.get('cover_bytes')
+                embedded_cover = extract_cover_from_audio(final_path) or cover_bytes
+                if embedded_cover:
+                    thumb = compress_cover(embedded_cover, 200 * 1024) if len(embedded_cover) > 200 * 1024 else embedded_cover
+
+                file_size_mb = final_path.stat().st_size / (1024 * 1024)
+                try:
+                    if file_size_mb > 49.0:
+                        uploaded = False
+                        try:
+                            litterbox = LitterboxClient()
+                            url = await asyncio.wait_for(
+                                asyncio.to_thread(litterbox.upload_file, str(final_path), expire_time="24h"),
+                                timeout=CLOUD_TIMEOUT
+                            )
+                            if url:
+                                await context.bot.send_message(
+                                    chat_id,
+                                    f"🎁 Ссылка на последний трек (24ч):\n{url}",
+                                    disable_web_page_preview=True
+                                )
+                                uploaded = True
+                        except Exception:
+                            pass
+                        if not uploaded:
+                            catbox = AsyncCatboxClient()
+                            url = await asyncio.wait_for(catbox.upload(str(final_path)), timeout=CLOUD_TIMEOUT)
+                            if url:
+                                await context.bot.send_message(
+                                    chat_id,
+                                    f"🎁 Постоянная ссылка на последний трек:\n{url}",
+                                    disable_web_page_preview=True
+                                )
+                                uploaded = True
+                        if not uploaded:
+                            await context.bot.send_message(chat_id, "⚠️ Не удалось загрузить последний трек в облако.")
+                    else:
+                        with open(final_path, 'rb') as af:
+                            await context.bot.send_audio(
+                                chat_id=chat_id,
+                                audio=af,
+                                performer=artist,
+                                title=title,
+                                duration=get_audio_duration(final_path),
+                                filename=safe_name,
+                                thumbnail=thumb,
+                                read_timeout=600, write_timeout=600
+                            )
+                    await context.bot.send_message(chat_id, "📤 Последний загруженный трек отправлен.")
+                    add_stats(final_path.stat().st_size)
+                    last_track_sent = True
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить последний трек при отмене: {e}")
+
+        # Удаляем статусное сообщение
+        msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
+        if msg_id:
+            with contextlib.suppress(Exception):
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+
+        current_task_info.pop(task_id, None)
         cancelled_count += 1
 
-    # Убираем лишние задачи из очереди (те, что ещё не начались)
+    # Убираем оставшиеся задачи пользователя из очереди
     remaining = []
     removed_from_queue = 0
     while not download_queue.empty():
@@ -756,52 +843,66 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
     for t in remaining:
         await download_queue.put(t)
 
+    # Обновляем счётчик
     global active_tasks_count
-    active_tasks_count -= removed_from_queue
+    active_tasks_count -= (cancelled_count + removed_from_queue)
     if active_tasks_count < 0:
         active_tasks_count = 0
 
     save_queue_state()
+
+    total = cancelled_count + removed_from_queue
+    result_msg = f"✅ Загрузка отменена. Отменено задач: {total}."
+    await context.bot.send_message(chat_id, result_msg)
+
     logger.info(f"Реализована отмена загрузки в чате {chat_id}: отменено {cancelled_count} активных, убрано из очереди {removed_from_queue}")
 
+    await show_main_menu_from_chat(context.bot, chat_id)
+
+
+async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик inline-кнопки отмены загрузки."""
+    await cancel_download(update, context, is_callback=True)
+
 
 # ======================================================================
-# ГЛОБАЛЬНАЯ ЭКСТРЕННАЯ ОСТАНОВКА
+# ЭКСТРЕННАЯ ОСТАНОВКА (ЖЁСТКАЯ)
 # ======================================================================
+
 async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Немедленная глобальная остановка: взводится флаг emergency_stop_active.
-    Воркер прекращает обработку, не отправляя файлы.
-    Все временные папки удаляются.
+    Экстренная остановка: убивает все процессы, удаляет временные файлы,
+    очищает очередь без отправки последнего трека.
+    Пользователю показывается только сообщение об остановке.
+    Логирует только факт экстренной остановки.
     """
-    global emergency_stop_active
-    emergency_stop_active = True
     chat_id = update.effective_chat.id
-
     await update.message.reply_text("🛑 Экстренная остановка…")
 
-    # Убиваем все процессы
+    # Убиваем все процессы и удаляем временные папки
     for task_id, info in list(current_task_info.items()):
         proc = info.get('process')
         if proc and not proc.returncode:
             try:
                 proc.kill()
                 await proc.wait()
-            except:
+            except Exception:
                 pass
+
         # Удаляем статусное сообщение
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             with contextlib.suppress(Exception):
-                await context.bot.delete_message(chat_id=info.get('chat_id', chat_id), message_id=msg_id)
-        # Удаляем временную папку
+                await context.bot.delete_message(chat_id=info['chat_id'], message_id=msg_id)
+
+        # Удаляем временную папку задачи
         tmp_dir = info.get('tmp_dir')
         if tmp_dir and tmp_dir.exists():
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    current_task_info.clear()
+        current_task_info.pop(task_id, None)
 
-    # Очищаем очередь
+    # Очищаем очередь полностью
     while not download_queue.empty():
         try:
             download_queue.get_nowait()
@@ -815,18 +916,13 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("✅ Экстренная остановка выполнена. Используй /start для перезапуска.")
     logger.info(f"Реализована экстренная остановка в чате {chat_id}")
-    # Не снимаем флаг, чтобы новые задачи не запускались до перезапуска бота
-    # (но для возможности повторного запуска можно снять через время, но пока так)
     await show_main_menu_from_chat(context.bot, chat_id)
-
-
-async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await cancel_download(update, context, is_callback=True)
 
 
 # ======================================================================
 # ПЕРЕЗАПУСК ЗАВИСШЕЙ ЗАДАЧИ
 # ======================================================================
+
 async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -861,6 +957,7 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
 # ======================================================================
 # ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ
 # ======================================================================
+
 async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update):
         return WAITING_FOR_LINK
@@ -1011,8 +1108,9 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ======================================================================
-# ОБРАБОТКА НАКОПЛЕННЫХ ССЫЛОК
+# ОБРАБОТКА НАКОПЛЕННЫХ ССЫЛОК (ПАКЕТНАЯ)
 # ======================================================================
+
 def make_track_dict(track, base_url: str, original_url: str,
                     batch_type=None, batch_name=None, batch_artist=None, batch_owner=None,
                     total=0, cover_bytes=None, album=None, year=None, genre=None):
@@ -1179,8 +1277,9 @@ async def process_accumulated_links(user_id, chat_id, context, token):
 
 
 # ======================================================================
-# СОХРАНЕНИЕ И ВОССТАНОВЛЕНИЕ ОЧЕРЕДИ
+# СОХРАНЕНИЕ И ВОССТАНОВЛЕНИЕ ОЧЕРЕДИ ЗАГРУЗОК
 # ======================================================================
+
 def save_queue_state():
     tasks = []
     while not download_queue.empty():
@@ -1224,16 +1323,14 @@ def load_queue_state():
 
 
 # ======================================================================
-# ВОРКЕР (С КООПЕРАТИВНОЙ ОТМЕНОЙ И ПРОВЕРКОЙ emergency_stop_active)
+# ВОРКЕР (СКАЧИВАНИЕ, ОБРАБОТКА ТЕГОВ, ОТПРАВКА) – ИСПРАВЛЕН
 # ======================================================================
+
 async def worker_loop(app):
-    global worker_busy, active_tasks_count, emergency_stop_active
+    global worker_busy, active_tasks_count
+    chat_temp_msg = {}
 
     while True:
-        if emergency_stop_active:
-            await asyncio.sleep(1)
-            continue
-
         if not shutil.which(DOWNLOADER_PATH):
             logger.error(f"Загрузчик {DOWNLOADER_PATH} не найден!")
             await asyncio.sleep(60)
@@ -1247,17 +1344,26 @@ async def worker_loop(app):
             task_id = f"{task['batch_id']}_{task['batch_index']}"
             chat_id = task['chat_id']
 
-            # Проверка флага экстренной остановки перед началом обработки
-            if emergency_stop_active:
-                worker_busy = False
-                continue
-
             async with download_semaphore:
                 status_msg = None
                 downloader_process = None
+                stuck_notified = False
                 success = False
                 actual_quality_used = current_quality
                 try:
+                    old = active_status_msgs.pop(task_id, None)
+                    if old:
+                        try:
+                            await app.bot.delete_message(chat_id=old['chat_id'], message_id=old['message_id'])
+                        except:
+                            pass
+                    prev = chat_temp_msg.pop(chat_id, None)
+                    if prev:
+                        try:
+                            await app.bot.delete_message(chat_id=chat_id, message_id=prev)
+                        except:
+                            pass
+
                     tmp_dir.mkdir(exist_ok=True)
 
                     keyboard = InlineKeyboardMarkup([
@@ -1298,8 +1404,7 @@ async def worker_loop(app):
                         "task": task,
                         "process": None,
                         "status_msg_id": status_msg.message_id,
-                        "tmp_dir": tmp_dir,
-                        "cancel_requested": False
+                        "tmp_dir": tmp_dir   # для отмены с отправкой последнего трека
                     }
 
                     async def run_downloader(quality, tmp_path):
@@ -1335,26 +1440,28 @@ async def worker_loop(app):
                             proc.kill()
                             return -1, b'', b'Timeout'
 
-                    # Основной цикл попыток
                     for attempt in range(3):
-                        if emergency_stop_active:
-                            break
+                        if time.time() - start_time > STUCK_TIMEOUT and not stuck_notified:
+                            stuck_notified = True
+                            new_keyboard = InlineKeyboardMarkup([
+                                [InlineKeyboardButton("⏹ Отменить загрузку", callback_data="cancel_download")],
+                                [InlineKeyboardButton("🔄 Перезапустить загрузчик", callback_data="restart_stuck_task")]
+                            ])
+                            try:
+                                await app.bot.edit_message_reply_markup(chat_id, status_msg.message_id, reply_markup=new_keyboard)
+                            except:
+                                pass
 
-                        # Проверка отмены пользователем
-                        if current_task_info.get(task_id, {}).get('cancel_requested'):
-                            break
-
-                        # Проверка диска
                         enough, free_mb = check_disk_space()
                         if not enough:
                             if current_quality > 0:
                                 new_q = current_quality - 1
-                                if task_id in current_task_info and not current_task_info[task_id].get('cancel_requested'):
+                                if task_id in current_task_info:
                                     await app.bot.send_message(chat_id, f"⚠️ Мало места! Понижаю качество до {QUALITY_NAMES[new_q]}.")
                                 current_quality = new_q
                                 continue
                             else:
-                                if task_id in current_task_info and not current_task_info[task_id].get('cancel_requested'):
+                                if task_id in current_task_info:
                                     await app.bot.send_message(chat_id, "❌ Недостаточно места даже для низкого качества.")
                                 break
 
@@ -1373,82 +1480,27 @@ async def worker_loop(app):
                         if returncode == -9:
                             if current_quality > 0:
                                 current_quality -= 1
-                                if task_id in current_task_info and not current_task_info[task_id].get('cancel_requested'):
+                                if task_id in current_task_info:
                                     await app.bot.send_message(chat_id, "⚠️ Нехватка памяти. Понижаю качество.")
                                 continue
                             else:
-                                if task_id in current_task_info and not current_task_info[task_id].get('cancel_requested'):
+                                if task_id in current_task_info:
                                     await app.bot.send_message(chat_id, "❌ Недостаточно памяти даже для низкого качества.")
                                 break
 
                         if any(k in stderr_text.lower() for k in ['forbidden', 'blocked', 'denied', 'регион', 'недоступен', '403']):
-                            if task_id in current_task_info and not current_task_info[task_id].get('cancel_requested'):
+                            if task_id in current_task_info:
                                 await app.bot.send_message(chat_id, f"❌ Трек заблокирован Яндексом: {task['track_name']}")
                             break
 
                         if attempt == 2:
-                            if task_id in current_task_info and not current_task_info[task_id].get('cancel_requested'):
+                            if task_id in current_task_info:
                                 await app.bot.send_message(chat_id, f"❌ Не удалось скачать {task['track_name']}.")
                         else:
                             await asyncio.sleep(5)
 
-                    # Проверка флагов перед отправкой
-                    if emergency_stop_active:
-                        continue
-                    if current_task_info.get(task_id, {}).get('cancel_requested'):
-                        # Мягкая отмена: отправляем последний трек, если он есть
-                        if success:
-                            files = list(tmp_dir.rglob('*.mp3')) + list(tmp_dir.rglob('*.m4a'))
-                            if files:
-                                f_path = files[0]
-                                artist = task.get('artist', 'Неизвестен')
-                                title = task.get('title', f_path.stem)
-                                safe_name = re.sub(r'[\\/*?:"<>|]', "", f"{artist} - {title}{f_path.suffix}")
-                                final_path = f_path.with_name(safe_name)
-                                f_path.rename(final_path)
-
-                                thumb = None
-                                cover_bytes = task.get('cover_bytes')
-                                embedded_cover = extract_cover_from_audio(final_path) or cover_bytes
-                                if embedded_cover:
-                                    thumb = compress_cover(embedded_cover, 200*1024) if len(embedded_cover) > 200*1024 else embedded_cover
-
-                                file_size_mb = final_path.stat().st_size / (1024 * 1024)
-                                if file_size_mb > 49.0:
-                                    uploaded = False
-                                    try:
-                                        litterbox = LitterboxClient()
-                                        url = await asyncio.wait_for(asyncio.to_thread(litterbox.upload_file, str(final_path), expire_time="24h"), timeout=CLOUD_TIMEOUT)
-                                        if url:
-                                            await app.bot.send_message(chat_id, f"🎁 Ссылка на последний трек (24ч):\n{url}", disable_web_page_preview=True)
-                                            uploaded = True
-                                    except:
-                                        pass
-                                    if not uploaded:
-                                        catbox = AsyncCatboxClient()
-                                        url = await asyncio.wait_for(catbox.upload(str(final_path)), timeout=CLOUD_TIMEOUT)
-                                        if url:
-                                            await app.bot.send_message(chat_id, f"🎁 Постоянная ссылка на последний трек:\n{url}", disable_web_page_preview=True)
-                                            uploaded = True
-                                    if not uploaded:
-                                        await app.bot.send_message(chat_id, "⚠️ Не удалось загрузить последний трек в облако.")
-                                else:
-                                    with open(final_path, 'rb') as af:
-                                        await app.bot.send_audio(
-                                            chat_id=chat_id,
-                                            audio=af,
-                                            performer=artist,
-                                            title=title,
-                                            duration=get_audio_duration(final_path),
-                                            filename=safe_name,
-                                            thumbnail=thumb,
-                                            read_timeout=600, write_timeout=600
-                                        )
-                                await app.bot.send_message(chat_id, "📤 Последний загруженный трек отправлен.")
-                                add_stats(final_path.stat().st_size)
-                        continue
-
                     if not success:
+                        current_task_info.pop(task_id, None)
                         continue
 
                     if actual_quality_used != task.get('quality', DEFAULT_QUALITY):
@@ -1457,8 +1509,6 @@ async def worker_loop(app):
 
                     files = list(tmp_dir.rglob('*.mp3')) + list(tmp_dir.rglob('*.m4a'))
                     for f_path in files:
-                        if emergency_stop_active:
-                            break
                         file_size_mb = f_path.stat().st_size / (1024 * 1024)
                         artist = task.get('artist', 'Неизвестен')
                         title = task.get('title', f_path.stem)
@@ -1543,24 +1593,27 @@ async def worker_loop(app):
                             if not uploaded:
                                 await app.bot.send_message(chat_id, "❌ Не удалось загрузить файл в облако.")
                         else:
-                            with open(final_path, 'rb') as af:
-                                await app.bot.send_audio(
-                                    chat_id=chat_id,
-                                    audio=af,
-                                    performer=artist,
-                                    title=title,
-                                    duration=get_audio_duration(final_path),
-                                    filename=safe_name,
-                                    thumbnail=thumb,
-                                    read_timeout=600, write_timeout=600
-                                )
+                            try:
+                                with open(final_path, 'rb') as af:
+                                    await app.bot.send_audio(
+                                        chat_id=chat_id,
+                                        audio=af,
+                                        performer=artist,
+                                        title=title,
+                                        duration=get_audio_duration(final_path),
+                                        filename=safe_name,
+                                        thumbnail=thumb,
+                                        read_timeout=600, write_timeout=600
+                                    )
+                            except Exception as e:
+                                logger.error(f"Ошибка отправки аудио: {e}")
+                                await app.bot.send_message(chat_id, f"❌ Не удалось отправить {safe_name}.")
 
                         add_stats(final_path.stat().st_size)
                         await asyncio.sleep(TRACK_DELAY_SECONDS)
                         gc.collect()
 
-                    # Финальное сообщение только если не было остановок
-                    if batch_total and batch_index == batch_total and not emergency_stop_active and task_id in current_task_info:
+                    if batch_total and batch_index == batch_total:
                         if batch_type == 'album':
                             finish = f"🎸 Альбом «{batch_name}» полностью загружен!"
                         elif batch_type == 'playlist':
@@ -1575,14 +1628,13 @@ async def worker_loop(app):
                         await app.bot.send_message(chat_id, finish, reply_markup=main_markup)
 
                 except Exception as e:
-                    if not emergency_stop_active:
-                        logger.error(f"Ошибка воркера: {e}", exc_info=True)
+                    logger.info(f"Задача прервана (отмена или ошибка): {task.get('track_name', '')} | {e}")
                 finally:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
                     worker_busy = False
-                    if task_id in active_status_msgs:
-                        active_status_msgs.pop(task_id)
-                    if status_msg and not emergency_stop_active:
+                    current_task_info.pop(task_id, None)
+                    active_status_msgs.pop(task_id, None)
+                    if status_msg:
                         try:
                             await status_msg.delete()
                         except:
@@ -1590,8 +1642,6 @@ async def worker_loop(app):
                     save_active_msgs()
                     save_queue_state()
                     active_tasks_count -= 1
-                    if active_tasks_count < 0:
-                        active_tasks_count = 0
         except Exception as e:
             logger.critical(f"Крах воркера: {e}")
             await asyncio.sleep(10)
@@ -1600,6 +1650,7 @@ async def worker_loop(app):
 # ======================================================================
 # ФОНОВЫЕ ЗАДАЧИ
 # ======================================================================
+
 async def memory_cleaner():
     while True:
         await asyncio.sleep(300)
@@ -1621,6 +1672,7 @@ async def check_all_tokens(app):
 # ======================================================================
 # ИНИЦИАЛИЗАЦИЯ И ЗАПУСК БОТА
 # ======================================================================
+
 async def post_init(app):
     global download_semaphore, download_queue, worker_task, token_checker_task, memory_cleaner_task
     download_semaphore = asyncio.Semaphore(1)
