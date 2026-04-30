@@ -271,32 +271,22 @@ def get_formatted_stats():
 
 # =================== АНИМИРОВАННАЯ ОТПРАВКА (как в хосте) ===================
 async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
-    """Анимированная отправка через черновик с гарантированным удалением."""
     draft_id = int(time.time() * 1000) + random.randint(1, 10000)
-    draft_created = False
     for attempt in range(max_retries):
         try:
-            # Показываем черновик
             await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
-            draft_created = True
             await asyncio.sleep(delay)
-            # Отправляем настоящее сообщение
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            try:
+                await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
+            except Exception:
+                pass
             return msg
         except Exception as e:
             logger.warning(f"Анимация {attempt+1}: {e}")
             if attempt == max_retries - 1:
-                # Последняя попытка — без анимации
                 return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             await asyncio.sleep(0.5 * (attempt + 1))
-        finally:
-            # ВСЕГДА удаляем черновик, если он был отправлен
-            if draft_created:
-                try:
-                    await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-                except Exception:
-                    pass
-    # Сюда не должны дойти, но на всякий случай
     return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
