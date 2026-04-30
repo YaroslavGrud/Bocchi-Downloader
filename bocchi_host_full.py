@@ -863,7 +863,14 @@ async def cmd_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Чтобы продолжить, авторизуйся заново.",
         reply_markup=ReplyKeyboardMarkup([[KeyboardButton("🎵 Начать работу")]], resize_keyboard=True)
     )
-
+    
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает команду /cancel – завершает текущий диалог."""
+    await send_animated_message(
+        context.bot, update.effective_chat.id,
+        "❌ Действие отменено. Напиши /start, если захочешь начать заново."
+    )
+    return ConversationHandler.END
 
 # ======================================================================
 # ОТМЕНА ЗАГРУЗКИ
