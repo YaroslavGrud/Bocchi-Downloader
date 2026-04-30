@@ -3,7 +3,7 @@ set -e
 
 # ============================================================
 #  Единый скрипт развёртывания Bocchi Downloader
-#  Объединяет: Dockerfile, entrypoint.sh и запуск
+#  (исправленная версия с полной очисткой)
 # ============================================================
 
 GREEN='\033[0;32m'
@@ -24,31 +24,29 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# 2. Подготовка рабочей директории
-echo -e "\n📁 Подготовка рабочей директории..."
-mkdir -p "$WORKDIR" && cd "$WORKDIR"
+# 2. Полная очистка и подготовка рабочей директории
+echo -e "\n📁 Очистка и подготовка рабочей директории..."
+rm -rf "$WORKDIR"           # удаляем всё, что накопилось
+mkdir -p "$WORKDIR"
+cd "$WORKDIR"
 
-# 3. Запрос токена Telegram
+# 3. Запрос токена Telegram (в переменную, пока не в файл)
 echo -e "\n🔑 Введите токен Telegram бота (можно получить у @BotFather):"
 read -p "✏️  Токен: " TOKEN
+
+# 4. Клонирование репозитория (теперь папка гарантированно пуста)
+echo -e "\n📥 Клонирование репозитория (ветка $BRANCH)..."
+git clone --branch "$BRANCH" "$REPO_URL" .
+
+# 5. Запись .env ПОСЛЕ клонирования
 echo "TELEGRAM_TOKEN=$TOKEN" > .env
 echo -e "${GREEN}✅ Токен сохранён в .env${NC}"
 
-# 4. Клонирование / обновление репозитория
-echo -e "\n📥 Клонирование репозитория (ветка $BRANCH)..."
-if [ ! -d "$WORKDIR/.git" ]; then
-    git clone --branch "$BRANCH" "$REPO_URL" .
-else
-    echo "Репозиторий уже существует, выполняю git pull..."
-    git pull origin "$BRANCH"
-fi
-
-# 5. Создаём Dockerfile прямо в рабочей директории (перезаписываем, если есть)
+# 6. Создаём Dockerfile прямо здесь (перезаписываем, если есть)
 echo -e "\n🐳 Генерация Dockerfile с вшитым entrypoint..."
-cat > "$WORKDIR/Dockerfile" <<'DOCKERFILE_EOF'
+cat > Dockerfile <<'DOCKERFILE_EOF'
 FROM python:3.11-slim
 
-# Системные зависимости
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     git \
@@ -56,32 +54,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Установка yandex-music-api из исходников MarshalX
 RUN git clone https://github.com/MarshalX/yandex-music-api && \
     cd yandex-music-api && \
     pip install --no-cache-dir . && \
     pip install --no-cache-dir ".[async]" && \
-    cd .. && \
-    rm -rf yandex-music-api
+    cd .. && rm -rf yandex-music-api
 
-# Установка yandex-music-downloader
 RUN pip install --no-cache-dir -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
 
-# Копируем список зависимостей и доустанавливаем остальное
 COPY requirements.txt .
 RUN grep -v "yandex-music" requirements.txt | grep -v "yandex-music-downloader" > requirements_clean.txt && \
-    pip install --no-cache-dir -r requirements_clean.txt && \
-    rm requirements.txt requirements_clean.txt
+    pip install --no-cache-dir -r requirements_clean.txt && rm requirements.txt requirements_clean.txt
 
-# Копируем весь код бота
 COPY . .
 
-# Переменные окружения
 ENV PYTHONUNBUFFERED=1
 RUN mkdir -p /app/data
 ENV STATS_FILE=/app/data/stats.txt
 
-# Вшитый entrypoint (не требует внешнего файла)
 RUN echo '#!/bin/bash\n\
 cd /app\n\
 if [ -f "bocchi_host_full.py" ]; then\n\
@@ -100,16 +90,16 @@ DOCKERFILE_EOF
 
 echo -e "${GREEN}✅ Dockerfile создан${NC}"
 
-# 6. Сборка Docker-образа
-echo -e "\n🐳 Сборка Docker-образа (это займёт несколько минут)..."
+# 7. Сборка образа
+echo -e "\n🐳 Сборка Docker-образа..."
 docker build -t bocchi_bot .
 
-# 7. Остановка старого контейнера при его наличии
-echo -e "\n🔄 Проверка и очистка старых контейнеров..."
+# 8. Остановка и удаление старого контейнера
+echo -e "\n🔄 Очистка старых контейнеров..."
 docker stop bocchi_bot 2>/dev/null || true
 docker rm bocchi_bot 2>/dev/null || true
 
-# 8. Запуск нового контейнера
+# 9. Запуск нового контейнера
 echo -e "\n🚀 Запуск контейнера..."
 docker run -d \
     --name bocchi_bot \
@@ -118,7 +108,7 @@ docker run -d \
     -v "$(pwd)/data:/app/data" \
     bocchi_bot
 
-# 9. Финальное сообщение
+# 10. Финал
 echo -e "\n${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║              ✅ БОТ УСПЕШНО ЗАПУЩЕН!                 ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
