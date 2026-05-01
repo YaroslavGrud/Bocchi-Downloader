@@ -101,9 +101,9 @@ Termux вернётся в исходное состояние.
 
 ## 📄 Лицензия
 
-Проект распространяется под лицензией MIT.  
+Проект распространяется под некоммерческой лицензией  
 Используемые компоненты:  
 - [Termux](https://github.com/termux/termux-app) (GPLv3)  
 - [proot-distro](https://github.com/termux/proot-distro) (GPLv3)  
 - [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) (MIT)  
-- [Bocchi Downloader](https://github.com/YaroslavGrud/Bocchi-Downloader) (MIT)
+- [Bocchi Downloader](https://github.com/YaroslavGrud/Bocchi-Downloader)
