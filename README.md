@@ -2,7 +2,7 @@
 Загрузчик музыки из сервиса "Яндекс.Музыка" в высоком качестве [с поддержкой CLI](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/ReadmeCLI.md)
 
 > [!CAUTION]
-> Ваш токен Яндекс.Музыки может быть [виден на сервере](https://github.com/YaroslavGrud/Bocchi-Downloader/edit/Yaroslav_grud/SECURITY.md)
+> Ваш токен Яндекс.Музыки может быть [виден на сервере](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/SECURITY.md)
 
 > [!WARNING]
 > 
@@ -12,7 +12,6 @@
 Спасибо за ваше терпение и помощь в улучшении проекта!
 
 ## 📌 Состояние проекта
-
 
 | Показатель | Бейдж |
 |------------|-------|
@@ -54,6 +53,7 @@
 | Установка (deploy) | [![deploy.sh](https://img.shields.io/badge/deploy.sh-установка-116062?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/deploy.sh) |
 | Перезапуск (restart) | [![restart.sh](https://img.shields.io/badge/restart.sh-перезапуск-orange?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/restart.sh) |
 | Очистка (clean) | [![clean.sh](https://img.shields.io/badge/docker_clean.sh-очистка-C51A4A?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/docker_clean.sh) |
+
 ## ✨ Возможности
 
 - 🎵 **Загрузка треков** по ссылкам (одиночные треки и альбомы)
@@ -81,6 +81,7 @@
 pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
 yandex-music-downloader --help
 ```
+
 ### Обновлённый API (MarshalX)
 
 ```bash
@@ -121,18 +122,23 @@ bocchi_env/bin/python bocchi_bot_android.py
 
 ## 📊 Команды бота
 
-> [!TIP]
-> Основные команды расположены в `main_menu_keyboard` \
-> Ниже представлена таблица практически для всех версий
+| Команда | Назначение | Доступность |
+|---------|------------|-------------|
+| `/start` | Запуск бота, авторизация, главное меню | **Все Telegram-версии** (host_full, host, raspberry, legacy, windows, android) |
+| `/status` | Состояние сервера (CPU, память, температура, очередь) | `bocchi_host_full.py`, `bocchi_bot_raspberry.py`, `bocchi_Legacy_bot_raspberry.py` |
+| `/logout` | Удалить сохранённый токен Яндекса | **Все Telegram-версии** |
+| `/quality` | Изменить качество загрузки (Низкое / Среднее / Высокое) | `bocchi_host_full.py`, `bocchi_bot_host.py` |
+| `/stop` | Экстренная (жёсткая) остановка всех загрузок | `bocchi_host_full.py`, `bocchi_bot_host.py` |
+| `/menu` | Показать главное меню с кнопками | Все серверные (host_full, host, raspberry), windows, android |
+| `/cancel` | Отменить текущий диалог (возврат в меню) | Все серверные, windows, android |
 
-
-| Команда | Описание |
-|---------|----------|
-| `/start` | Начать диалог с ботом |
-| `/status` | Показать состояние сервера (CPU, память, температура, очередь загрузок) |
-| `/logout` | Удалить сохранённый токен и выйти из аккаунта |
-
-
+> [!NOTE]
+> **CLI-версия** (`bocchi_bot_CLI.py`) **не является Telegram-ботом** — это консольное приложение. Управление в нём осуществляется **цифрами** через текстовое меню, а не командами.
+>
+> В версиях для **Android** и **Windows** отсутствуют команды `/status` и `/quality`.  
+> В **Legacy Raspberry Pi** нет `/menu`, `/cancel`, `/quality`, `/stop`.
+>
+> Все остальные действия (отправка ссылок, обновление токена, отмена загрузки) доступны через **кнопки главного меню** в серверных версиях.
 
 ## 🔧 Особенности работы
 
@@ -164,7 +170,7 @@ bocchi_env/bin/python bocchi_bot_android.py
 Ссылки приходят в чат и файл можно скачать по ним.
 
 ---
-> [!IMPORTANT]
+> [!NOTE]
 > ### Бот не отвечает
 > - Проверьте, что токен Telegram корректен
 > - Убедитесь, что бот запущен и не упал с ошибкой
