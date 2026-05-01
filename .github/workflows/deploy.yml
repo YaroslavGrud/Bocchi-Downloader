@@ -1,0 +1,29 @@
+name: Build and Push to Docker Hub
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:   # позволяет запускать вручную
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: yaroslavgrud/bocchi-downloader-server-edition:latest
