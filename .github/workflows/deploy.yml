@@ -27,3 +27,11 @@ jobs:
           context: .
           push: true
           tags: yaroslavgrud/bocchi-downloader-server-edition:latest
+
+      - name: Docker Scout security scan
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: yaroslavgrud/bocchi-downloader-server-edition:latest
+          # Не прерываем workflow при обнаружении уязвимостей
+          exit-code: false
