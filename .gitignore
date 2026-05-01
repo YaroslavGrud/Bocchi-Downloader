@@ -5,9 +5,21 @@ __pycache__/
 .Python
 env/
 venv/
+
+# Конфигурация с секретами
+.env
 .env.example
+
+# Логи и статистика
 *.log
 stats.txt
+
+# Временные файлы бота
 bocchi_tmp_*
 *.pid
+
+# Резервные копии файлов
+*.bak
+
+# Системные файлы
 .DS_Store
