@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  bocchi:
+    # Готовый образ из Docker Hub
+    image: yaroslavgrud/bocchi-downloader-server-edition:latest
+    # Для локальной разработки: закомментируй строку выше и раскомментируй ниже
+    # build: .
+    container_name: bocchi-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - BOT_MODE=${BOT_MODE:-stable}
+    volumes:
+      - bocchi_data:/app/data   # постоянное хранилище (статистика и т.п.)
+
+volumes:
+  bocchi_data:
+    driver: local
