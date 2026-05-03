@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Bocchi Downloader · Server Status</title>
+    <link rel="icon" type="image/png" href="https://cdn-icons-png.flaticon.com/512/355/355081.png">
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: radial-gradient(circle at 20% 30%, #0d0d1a, #02020a);
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: #eef;
+        }
+        .dashboard {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 12px;
+            flex: 1;
+            width: 100%;
+        }
+        .header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid rgba(245, 160, 197, 0.3);
+        }
+        .title {
+            font-family: 'Fredoka', sans-serif;
+            font-size: clamp(1.1rem, 5vw, 1.8rem);
+            font-weight: 700;
+            color: #F5A0C5;
+        }
+        .bot-status {
+            background: #1e1e2a;
+            padding: 5px 12px;
+            border-radius: 60px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-family: monospace;
+            font-size: clamp(0.65rem, 3.5vw, 0.9rem);
+            border: 1px solid #F5A0C5;
+        }
+        .led {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .led-green {
+            background-color: #2ecc71;
+            animation: pulse 1.4s ease-in-out infinite;
+        }
+        .led-red {
+            background-color: #ff4444;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.3; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1); }
+            100% { opacity: 0.3; transform: scale(0.8); }
+        }
+        .status-text-green {
+            color: #2ecc71;
+            font-weight: 500;
+        }
+        .status-text-red {
+            color: #ff4444;
+            font-weight: 500;
+        }
+        .system-info-bar {
+            background: rgba(30, 30, 42, 0.7);
+            border-radius: 24px;
+            padding: 8px 16px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            font-size: clamp(0.65rem, 3.5vw, 0.85rem);
+            border: 1px solid rgba(245, 160, 197, 0.3);
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .card {
+            background: rgba(20, 20, 30, 0.65);
+            backdrop-filter: blur(8px);
+            border-radius: 20px;
+            padding: 14px;
+            border: 1px solid rgba(245, 160, 197, 0.25);
+            transition: 0.2s;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+        .card-title {
+            font-size: clamp(0.95rem, 4.5vw, 1.2rem);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #F5A0C5;
+            border-left: 3px solid #F5A0C5;
+            padding-left: 10px;
+            font-weight: 600;
+        }
+        .metric-row {
+            display: flex;
+            justify-content: flex-start;
+            align-items: baseline;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 8px;
+            font-size: clamp(0.75rem, 3.5vw, 0.95rem);
+        }
+        .metric-label { color: #aaa; }
+        .metric-value { font-weight: 500; color: white; }
+        .progress-bar-bg {
+            background: #2a2a36;
+            border-radius: 20px;
+            height: 6px;
+            margin: 8px 0;
+        }
+        .progress-fill {
+            background: linear-gradient(90deg, #F5A0C5, #FF8EB5);
+            width: 0%;
+            height: 100%;
+            border-radius: 20px;
+            transition: width 0.3s ease-out;
+        }
+        .chart-container {
+            border: 1px solid rgba(245, 160, 197, 0.3);
+            border-radius: 16px;
+            padding: 8px;
+            margin-top: 12px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+        canvas { max-height: 150px; width: 100%; }
+        .custom-legend {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 8px;
+            font-size: 0.75rem;
+            color: #ccc;
+        }
+        .legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .update-time {
+            font-size: 0.7rem;
+            text-align: right;
+            color: #888;
+            margin-top: 6px;
+        }
+        footer {
+            text-align: center;
+            margin-top: auto;
+            padding: 16px;
+            font-size: clamp(0.55rem, 3vw, 0.7rem);
+            opacity: 0.7;
+            border-top: 1px solid rgba(245, 160, 197, 0.2);
+        }
+        @media (max-width: 540px) {
+            body { padding: 0; }
+            .dashboard { padding: 8px; }
+            .card { padding: 12px; }
+            .metric-value { text-align: left; }
+            .bot-status, .title { width: 100%; justify-content: center; }
+            .header { flex-direction: column; align-items: stretch; text-align: center; }
+            .system-info-bar { flex-direction: column; align-items: stretch; text-align: center; }
+            canvas { max-height: 130px; }
+        }
+    </style>
+</head>
+<body>
+<div class="dashboard">
+    <div class="header">
+        <div class="title">Bocchi Downloader — Server Status</div>
+        <div class="bot-status">
+            <span id="botLed" class="led led-green"></span>
+            <span id="botStatusText" class="status-text-green">Бот онлайн</span>
+        </div>
+    </div>
+    <div class="system-info-bar">
+        <span><i class="fas fa-desktop"></i> <span id="osInfo">Ubuntu</span> · <span id="kernelInfo">загрузка...</span></span>
+        <span><i class="fas fa-clock"></i> Время работы: <span id="serverUptime">--</span></span>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <div class="card-title"><i class="fas fa-microchip"></i> Процессор</div>
+            <div class="metric-row"><span class="metric-label">Загрузка</span><span class="metric-value" id="cpuPercent">0%</span></div>
+            <div class="progress-bar-bg"><div class="progress-fill" id="cpuFill" style="width:0%"></div></div>
+            <div class="metric-row"><span class="metric-label">Средняя нагрузка (1/5/15 мин)</span><span class="metric-value" id="loadAvg">0.00 / 0.00 / 0.00</span></div>
+            <div class="chart-container">
+                <div class="custom-legend"><div class="legend-item"><span class="legend-color" style="background:#F5A0C5;"></span> Загрузка, %</div></div>
+                <canvas id="cpuChart"></canvas>
+                <div class="update-time" id="cpuUpdateTime">Обновлено: --:--:--</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title"><i class="fas fa-memory"></i> Оперативная память</div>
+            <div class="metric-row"><span class="metric-label">Занято</span><span class="metric-value" id="ramUsed">0 MB</span></div>
+            <div class="progress-bar-bg"><div class="progress-fill" id="ramFill" style="width:0%"></div></div>
+            <div class="metric-row"><span class="metric-label">Свободно</span><span class="metric-value" id="ramFree">0 MB</span></div>
+            <div class="metric-row"><span class="metric-label">Всего</span><span class="metric-value" id="ramTotal">0 MB</span></div>
+            <div class="chart-container">
+                <div class="custom-legend"><div class="legend-item"><span class="legend-color" style="background:#FFB347;"></span> Использование, MB</div></div>
+                <canvas id="ramChart"></canvas>
+                <div class="update-time" id="ramUpdateTime">Обновлено: --:--:--</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title"><i class="fas fa-network-wired"></i> Сеть</div>
+            <div class="metric-row" style="justify-content: space-evenly; margin-bottom: 8px;">
+                <div><i class="fas fa-arrow-down"></i> <span id="rxSpeed" class="net-value">0</span> <span id="rxUnit" class="net-unit">KB/s</span></div>
+                <div><i class="fas fa-arrow-up"></i> <span id="txSpeed" class="net-value">0</span> <span id="txUnit" class="net-unit">KB/s</span></div>
+            </div>
+            <div class="chart-container">
+                <div class="custom-legend">
+                    <div class="legend-item"><span class="legend-color" style="background:#6bc5ff;"></span> Входящий, KB/s</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#F5A0C5;"></span> Исходящий, KB/s</div>
+                </div>
+                <canvas id="netChart"></canvas>
+                <div class="update-time" id="netUpdateTime">Обновлено: --:--:--</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title"><i class="fas fa-hdd"></i> Диск</div>
+            <div class="metric-row"><span class="metric-label">Использовано</span><span class="metric-value" id="diskUsed">0 GB</span></div>
+            <div class="progress-bar-bg"><div class="progress-fill" id="diskFill" style="width:0%"></div></div>
+            <div class="metric-row"><span class="metric-label">Свободно</span><span class="metric-value" id="diskFree">0 GB</span></div>
+            <div class="metric-row"><span class="metric-label">Всего</span><span class="metric-value" id="diskTotal">0 GB</span></div>
+        </div>
+    </div>
+    <footer>Данные обновляются с помощью Glances API · Дизайн разработан при поддержке #BocchiIsAlive 🎸</footer>
+</div>
+
+<script>
+    const API_BASE = '/api';
+    const MAX_POINTS = 20;
+    let timeLabels = [], cpuHistory = [], ramHistory = [], rxHistory = [], txHistory = [];
+    let prevRx = null, prevTx = null, lastNetFetchTime = 0;
+    let cpuChart, ramChart, netChart;
+    let animationTimers = {};
+
+    function formatBytes(bytes) {
+        if (bytes === undefined || bytes === null) return { value: 0, unit: 'B' };
+        if (bytes < 1024) return { value: bytes, unit: 'B' };
+        if (bytes < 1024*1024) return { value: bytes / 1024, unit: 'KB' };
+        if (bytes < 1024*1024*1024) return { value: bytes / (1024*1024), unit: 'MB' };
+        return { value: bytes / (1024*1024*1024), unit: 'GB' };
+    }
+
+    function formatSize(bytes, decimals = 1) {
+        const { value, unit } = formatBytes(bytes);
+        return `${value.toFixed(decimals)} ${unit}`;
+    }
+
+    function formatSpeed(bytesPerSec) {
+        if (bytesPerSec < 1024) return { value: bytesPerSec, unit: 'B/s' };
+        if (bytesPerSec < 1024*1024) return { value: bytesPerSec / 1024, unit: 'KB/s' };
+        return { value: bytesPerSec / (1024*1024), unit: 'MB/s' };
+    }
+
+    function animateNumber(element, target, suffix, decimals = 1) {
+        if (animationTimers[element.id]) clearInterval(animationTimers[element.id]);
+        let start = parseFloat(element.getAttribute('data-current')) || 0;
+        if (isNaN(start)) start = 0;
+        if (start === target && element.innerText === target.toFixed(decimals) + suffix) return;
+        const duration = 300;
+        const stepTime = 10;
+        const steps = duration / stepTime;
+        const increment = (target - start) / steps;
+        let current = start;
+        let step = 0;
+        const timer = setInterval(() => {
+            step++;
+            current += increment;
+            if (step >= steps) {
+                current = target;
+                clearInterval(timer);
+                delete animationTimers[element.id];
+            }
+            element.setAttribute('data-current', current);
+            element.innerText = current.toFixed(decimals) + suffix;
+        }, stepTime);
+        animationTimers[element.id] = timer;
+    }
+
+    function animateNetNumber(element, target, decimals = 1) {
+        if (animationTimers[element.id]) clearInterval(animationTimers[element.id]);
+        let start = parseFloat(element.getAttribute('data-current')) || 0;
+        if (isNaN(start)) start = 0;
+        if (start === target && element.innerText === target.toFixed(decimals)) return;
+        const duration = 300;
+        const stepTime = 10;
+        const steps = duration / stepTime;
+        const increment = (target - start) / steps;
+        let current = start;
+        let step = 0;
+        const timer = setInterval(() => {
+            step++;
+            current += increment;
+            if (step >= steps) {
+                current = target;
+                clearInterval(timer);
+                delete animationTimers[element.id];
+            }
+            element.setAttribute('data-current', current);
+            element.innerText = current.toFixed(decimals);
+        }, stepTime);
+        animationTimers[element.id] = timer;
+    }
+
+    function updateNetSpeed(speedElem, unitElem, bytesPerSec) {
+        const fmt = formatSpeed(bytesPerSec);
+        animateNetNumber(speedElem, fmt.value, fmt.unit === 'MB/s' ? 1 : (fmt.unit === 'KB/s' ? 1 : 0));
+        unitElem.innerText = fmt.unit;
+    }
+
+    function getTotalDiskUsage(data) {
+        let totalUsed = 0;
+        let totalFree = 0;
+        for (const fs of data) {
+            const type = fs.fs_type || '';
+            const mnt = fs.mnt_point || '';
+            // Исключаем виртуальные ФС и snap
+            if (type === 'squashfs' || type === 'tmpfs' || type === 'devtmpfs' || type === 'overlay') continue;
+            if (mnt.startsWith('/snap/')) continue;
+            if (fs.size > 0) {
+                totalUsed += fs.used;
+                totalFree += fs.free;
+            }
+        }
+        const totalBytes = totalUsed + totalFree;
+        return { used: totalUsed, free: totalFree, total: totalBytes };
+    }
+
+    function declOfNum(number, titles) {
+        const cases = [2, 0, 1, 1, 1, 2];
+        return titles[(number % 100 > 4 && number % 100 < 20) ? 2 : cases[(number % 10 < 5) ? number % 10 : 5]];
+    }
+
+    function parseUptimeToRussian(uptimeStr) {
+        if (!uptimeStr) return 'недоступно';
+        if (uptimeStr.toLowerCase() === 'yesterday') return 'вчера';
+        const match = uptimeStr.match(/(\d+)\s+day[s]?,\s+(\d+):(\d+):(\d+)/i);
+        if (match) {
+            const days = parseInt(match[1]), hours = parseInt(match[2]), minutes = parseInt(match[3]), seconds = parseInt(match[4]);
+            let parts = [];
+            if (days > 0) parts.push(`${days} ${declOfNum(days, ['день', 'дня', 'дней'])}`);
+            if (hours > 0) parts.push(`${hours} ${declOfNum(hours, ['час', 'часа', 'часов'])}`);
+            if (minutes > 0) parts.push(`${minutes} ${declOfNum(minutes, ['минута', 'минуты', 'минут'])}`);
+            if (seconds > 0) parts.push(`${seconds} ${declOfNum(seconds, ['секунда', 'секунды', 'секунд'])}`);
+            if (parts.length === 0) return 'только что';
+            return parts.join(' ');
+        }
+        const hoursMatch = uptimeStr.match(/(\d+)\s+hours?/i);
+        if (hoursMatch) { const h = parseInt(hoursMatch[1]); return `${h} ${declOfNum(h, ['час', 'часа', 'часов'])}`; }
+        const minutesMatch = uptimeStr.match(/(\d+)\s+minutes?/i);
+        if (minutesMatch) { const m = parseInt(minutesMatch[1]); return `${m} ${declOfNum(m, ['минута', 'минуты', 'минут'])}`; }
+        const daysMatch = uptimeStr.match(/(\d+)\s+days?/i);
+        if (daysMatch) { const d = parseInt(daysMatch[1]); return `${d} ${declOfNum(d, ['день', 'дня', 'дней'])}`; }
+        return uptimeStr;
+    }
+
+    function getCurrentTimeLabel() {
+        const now = new Date();
+        return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function addDataPoint(cpu, ram, rx, tx) {
+        const ts = getCurrentTimeLabel();
+        timeLabels.push(ts);
+        cpuHistory.push(cpu);
+        ramHistory.push(ram);
+        rxHistory.push(rx);
+        txHistory.push(tx);
+        while (timeLabels.length > MAX_POINTS) {
+            timeLabels.shift(); cpuHistory.shift(); ramHistory.shift(); rxHistory.shift(); txHistory.shift();
+        }
+    }
+
+    function updateCharts() {
+        if (cpuChart) {
+            cpuChart.data.labels = [...timeLabels];
+            cpuChart.data.datasets[0].data = [...cpuHistory];
+            let maxCpu = Math.max(...cpuHistory, 5);
+            maxCpu = Math.min(Math.ceil(maxCpu * 1.1), 100);
+            if (maxCpu < 5) maxCpu = 10;
+            cpuChart.options.scales.y.max = maxCpu;
+            cpuChart.update('none');
+        }
+        if (ramChart) {
+            ramChart.data.labels = [...timeLabels];
+            ramChart.data.datasets[0].data = [...ramHistory];
+            let maxRam = Math.max(...ramHistory, 500);
+            maxRam = Math.ceil(maxRam * 1.1);
+            if (maxRam < 500) maxRam = 800;
+            ramChart.options.scales.y.max = maxRam;
+            ramChart.update('none');
+        }
+        if (netChart) {
+            netChart.data.labels = [...timeLabels];
+            netChart.data.datasets[0].data = [...rxHistory];
+            netChart.data.datasets[1].data = [...txHistory];
+            let maxNet = Math.max(...rxHistory, ...txHistory, 10);
+            maxNet = Math.ceil(maxNet * 1.1);
+            if (maxNet < 10) maxNet = 40;
+            if (maxNet > 125000) maxNet = 125000;
+            netChart.options.scales.y.max = maxNet;
+            netChart.update('none');
+        }
+    }
+
+    function initCharts() {
+        const cpuCtx = document.getElementById('cpuChart').getContext('2d');
+        cpuChart = new Chart(cpuCtx, { type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#F5A0C5', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#F5A0C5', pointStyle: 'circle' }] }, options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 30, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', stepSize: 5, callback: (v) => v + '%' } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } } });
+        const ramCtx = document.getElementById('ramChart').getContext('2d');
+        ramChart = new Chart(ramCtx, { type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#FFB347', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#FFB347', pointStyle: 'circle' }] }, options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 2000, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', stepSize: 500, callback: (v) => v + ' MB' } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } } });
+        const netCtx = document.getElementById('netChart').getContext('2d');
+        netChart = new Chart(netCtx, { type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#6bc5ff', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#6bc5ff', pointStyle: 'circle' }, { label: '', data: [], borderColor: '#F5A0C5', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#F5A0C5', pointStyle: 'circle' }] }, options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 40, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', stepSize: 10, callback: (v) => v + ' KB/s' } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } } });
+    }
+
+    async function fetchCPU() {
+        try { const resp = await fetch(`${API_BASE}/4/cpu`); const data = await resp.json(); let val = data.total; if (val > 100) val = 100; animateNumber(document.getElementById('cpuPercent'), val, '%', 1); document.getElementById('cpuFill').style.width = val + '%'; return val; } catch(e) { console.error(e); return 0; }
+    }
+    async function fetchLoad() {
+        try { const resp = await fetch(`${API_BASE}/4/load`); const data = await resp.json(); document.getElementById('loadAvg').innerText = `${data.min1?.toFixed(2)||0} / ${data.min5?.toFixed(2)||0} / ${data.min15?.toFixed(2)||0}`; } catch(e) { console.error(e); }
+    }
+    async function fetchMemory() {
+        try {
+            const resp = await fetch(`${API_BASE}/4/mem`);
+            const data = await resp.json();
+            const totalBytes = data.total;
+            const usedBytes = data.used;
+            const freeBytes = data.free + data.cached;
+            const totalFmt = formatBytes(totalBytes);
+            const usedFmt = formatBytes(usedBytes);
+            const freeFmt = formatBytes(freeBytes);
+            animateNumber(document.getElementById('ramUsed'), usedFmt.value, ' ' + usedFmt.unit, usedFmt.unit === 'GB' ? 2 : 0);
+            animateNumber(document.getElementById('ramFree'), freeFmt.value, ' ' + freeFmt.unit, freeFmt.unit === 'GB' ? 2 : 0);
+            animateNumber(document.getElementById('ramTotal'), totalFmt.value, ' ' + totalFmt.unit, totalFmt.unit === 'GB' ? 2 : 0);
+            const percent = (usedBytes / totalBytes) * 100;
+            document.getElementById('ramFill').style.width = percent + '%';
+            return usedBytes / (1024*1024);
+        } catch(e) { console.error(e); return 0; }
+    }
+    async function fetchDisks() {
+        try {
+            const resp = await fetch(`${API_BASE}/4/fs`);
+            const data = await resp.json();
+            const { used, free, total } = getTotalDiskUsage(data);
+            const usedFmt = formatBytes(used);
+            const freeFmt = formatBytes(free);
+            const totalFmt = formatBytes(total);
+            animateNumber(document.getElementById('diskUsed'), usedFmt.value, ' ' + usedFmt.unit, usedFmt.unit === 'GB' ? 2 : 0);
+            animateNumber(document.getElementById('diskFree'), freeFmt.value, ' ' + freeFmt.unit, freeFmt.unit === 'GB' ? 2 : 0);
+            animateNumber(document.getElementById('diskTotal'), totalFmt.value, ' ' + totalFmt.unit, totalFmt.unit === 'GB' ? 2 : 0);
+            const percent = total > 0 ? (used / total * 100) : 0;
+            document.getElementById('diskFill').style.width = percent + '%';
+        } catch(e) { console.error('Disks error', e); }
+    }
+    async function fetchNetwork() {
+        try {
+            const resp = await fetch(`${API_BASE}/4/network`);
+            const data = await resp.json();
+            const iface = data.find(i => i.interface_name === 'ens3');
+            if (iface) {
+                const nowRx = iface.bytes_recv;
+                const nowTx = iface.bytes_sent;
+                const nowTime = Date.now();
+                if (prevRx !== null && prevTx !== null && lastNetFetchTime !== 0) {
+                    let dt = (nowTime - lastNetFetchTime) / 1000;
+                    if (dt > 0) {
+                        let rx = (nowRx - prevRx) / dt;
+                        let tx = (nowTx - prevTx) / dt;
+                        if (rx < 0) rx = 0; if (tx < 0) tx = 0;
+                        if (rx > 125000000) rx = 125000000;
+                        if (tx > 125000000) tx = 125000000;
+                        updateNetSpeed(document.getElementById('rxSpeed'), document.getElementById('rxUnit'), rx);
+                        updateNetSpeed(document.getElementById('txSpeed'), document.getElementById('txUnit'), tx);
+                        prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime;
+                        let rxKB = rx / 1024;
+                        let txKB = tx / 1024;
+                        if (rxKB > 125000) rxKB = 125000;
+                        if (txKB > 125000) txKB = 125000;
+                        return { rx: rxKB, tx: txKB };
+                    }
+                }
+                prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime;
+                return { rx: 0, tx: 0 };
+            } else { return { rx: 0, tx: 0 }; }
+        } catch(e) { console.error('Network error', e); return { rx: 0, tx: 0 }; }
+    }
+    async function fetchSystem() {
+        try { const resp = await fetch(`${API_BASE}/4/system`); const data = await resp.json(); let osName = data.os_name || 'Linux'; if (osName === 'Linux') osName = 'Ubuntu 24.04 LTS'; document.getElementById('osInfo').innerText = osName; document.getElementById('kernelInfo').innerText = data.os_version || 'Linux'; } catch(e) { console.error(e); }
+    }
+    async function fetchUptime() {
+        try { const resp = await fetch(`${API_BASE}/4/uptime`); const data = await resp.json(); if (typeof data === 'string') { document.getElementById('serverUptime').innerText = parseUptimeToRussian(data); } else if (data && typeof data.uptime === 'number') { const sec = data.uptime; const d = Math.floor(sec/86400), h = Math.floor((sec%86400)/3600), m = Math.floor((sec%3600)/60), s = sec%60; let parts = []; if (d>0) parts.push(`${d} ${declOfNum(d,['день','дня','дней'])}`); if (h>0) parts.push(`${h} ${declOfNum(h,['час','часа','часов'])}`); if (m>0) parts.push(`${m} ${declOfNum(m,['минута','минуты','минут'])}`); if (s>0) parts.push(`${s} ${declOfNum(s,['секунда','секунды','секунд'])}`); if (parts.length===0) parts.push('только что'); document.getElementById('serverUptime').innerText = parts.join(' '); } else { document.getElementById('serverUptime').innerText = 'недоступно'; } } catch(e) { console.error(e); document.getElementById('serverUptime').innerText = 'ошибка'; }
+    }
+    async function fetchContainers() {
+        try { const resp = await fetch(`${API_BASE}/4/containers`); if (!resp.ok) throw new Error('Containers API not available'); const containers = await resp.json(); if (Array.isArray(containers)) { const bot = containers.find(c => c.name === 'bocchi_bot'); if (bot) { document.getElementById('botLed').className = 'led led-green'; document.getElementById('botStatusText').className = 'status-text-green'; document.getElementById('botStatusText').innerText = 'Бот онлайн'; } else { document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; } } else { document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; } } catch(e) { console.error('Containers error', e); document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; }
+    }
+
+    async function refreshData() {
+        const cpu = await fetchCPU();
+        await fetchLoad();
+        const ramMB = await fetchMemory();
+        await fetchDisks();
+        const net = await fetchNetwork();
+        await fetchSystem();
+        await fetchUptime();
+        await fetchContainers();
+        addDataPoint(cpu, ramMB, net.rx, net.tx);
+        updateCharts();
+        const now = getCurrentTimeLabel();
+        document.getElementById('cpuUpdateTime').innerText = `Обновлено: ${now}`;
+        document.getElementById('ramUpdateTime').innerText = `Обновлено: ${now}`;
+        document.getElementById('netUpdateTime').innerText = `Обновлено: ${now}`;
+    }
+
+    window.onload = () => {
+        initCharts();
+        for(let i=0;i<MAX_POINTS;i++) { timeLabels.push(getCurrentTimeLabel()); cpuHistory.push(0); ramHistory.push(0); rxHistory.push(0); txHistory.push(0); }
+        updateCharts();
+        refreshData();
+        setInterval(refreshData, 2000);
+    };
+</script>
+</body>
+</html>
