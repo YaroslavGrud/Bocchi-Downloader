@@ -18,6 +18,13 @@
 | Язык | [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)](https://www.python.org/) |
 | Лицензия | [![License: NonCommercial](https://img.shields.io/badge/License-NonCommercial-red?logo=gavel&logoColor=white)](LICENSE) |
 
+## 🔗 Доступ к дашбордам
+
+| Интерфейс | Бейдж |
+|-----------|-------|
+| **Bocchi Dashboard** (кастомный, порт 61209) | [![Bocchi Dashboard](https://img.shields.io/badge/Bocchi_Dashboard-ff69b4)](http://185.170.153.38:61209/) |
+| **Glances Web UI** (легаси, порт 61208) | [![Glances Web UI](https://img.shields.io/badge/Glances_UI-4c8c4c)](http://185.170.153.38:61208/) |
+
 ## 🐳 Серверная сборка (Docker)
 
 | Компонент | Бейдж |
