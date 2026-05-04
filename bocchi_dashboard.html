@@ -352,7 +352,6 @@
         for (const fs of data) {
             const type = fs.fs_type || '';
             const mnt = fs.mnt_point || '';
-            // Исключаем виртуальные ФС и snap
             if (type === 'squashfs' || type === 'tmpfs' || type === 'devtmpfs' || type === 'overlay') continue;
             if (mnt.startsWith('/snap/')) continue;
             if (fs.size > 0) {
@@ -369,27 +368,53 @@
         return titles[(number % 100 > 4 && number % 100 < 20) ? 2 : cases[(number % 10 < 5) ? number % 10 : 5]];
     }
 
+    // Универсальный парсер uptime с обязательным показом секунд
     function parseUptimeToRussian(uptimeStr) {
         if (!uptimeStr) return 'недоступно';
-        if (uptimeStr.toLowerCase() === 'yesterday') return 'вчера';
-        const match = uptimeStr.match(/(\d+)\s+day[s]?,\s+(\d+):(\d+):(\d+)/i);
+
+        if (typeof uptimeStr === 'number') return _formatSeconds(uptimeStr);
+
+        const lower = uptimeStr.toLowerCase();
+        if (lower === 'yesterday') return 'вчера';
+
+        let match = uptimeStr.match(/(\d+)\s+day[s]?,\s+(\d+):(\d+):(\d+)/i);
         if (match) {
             const days = parseInt(match[1]), hours = parseInt(match[2]), minutes = parseInt(match[3]), seconds = parseInt(match[4]);
-            let parts = [];
+            let total = days*86400 + hours*3600 + minutes*60 + seconds;
+            return _formatSeconds(total);
+        }
+
+        match = uptimeStr.match(/^(\d+):(\d+):(\d+)$/);
+        if (match) {
+            const hours = parseInt(match[1]), minutes = parseInt(match[2]), seconds = parseInt(match[3]);
+            let total = hours*3600 + minutes*60 + seconds;
+            return _formatSeconds(total);
+        }
+
+        const hoursMatch = uptimeStr.match(/(\d+)\s+hours?/i);
+        if (hoursMatch) return _formatSeconds(parseInt(hoursMatch[1]) * 3600);
+        const minutesMatch = uptimeStr.match(/(\d+)\s+minutes?/i);
+        if (minutesMatch) return _formatSeconds(parseInt(minutesMatch[1]) * 60);
+        const daysMatch = uptimeStr.match(/(\d+)\s+days?/i);
+        if (daysMatch) return _formatSeconds(parseInt(daysMatch[1]) * 86400);
+
+        return uptimeStr;
+
+        function _formatSeconds(seconds) {
+            if (seconds < 0) seconds = 0;
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+
+            const parts = [];
             if (days > 0) parts.push(`${days} ${declOfNum(days, ['день', 'дня', 'дней'])}`);
             if (hours > 0) parts.push(`${hours} ${declOfNum(hours, ['час', 'часа', 'часов'])}`);
             if (minutes > 0) parts.push(`${minutes} ${declOfNum(minutes, ['минута', 'минуты', 'минут'])}`);
-            if (seconds > 0) parts.push(`${seconds} ${declOfNum(seconds, ['секунда', 'секунды', 'секунд'])}`);
+            if (secs > 0) parts.push(`${secs} ${declOfNum(secs, ['секунда', 'секунды', 'секунд'])}`);
             if (parts.length === 0) return 'только что';
             return parts.join(' ');
         }
-        const hoursMatch = uptimeStr.match(/(\d+)\s+hours?/i);
-        if (hoursMatch) { const h = parseInt(hoursMatch[1]); return `${h} ${declOfNum(h, ['час', 'часа', 'часов'])}`; }
-        const minutesMatch = uptimeStr.match(/(\d+)\s+minutes?/i);
-        if (minutesMatch) { const m = parseInt(minutesMatch[1]); return `${m} ${declOfNum(m, ['минута', 'минуты', 'минут'])}`; }
-        const daysMatch = uptimeStr.match(/(\d+)\s+days?/i);
-        if (daysMatch) { const d = parseInt(daysMatch[1]); return `${d} ${declOfNum(d, ['день', 'дня', 'дней'])}`; }
-        return uptimeStr;
     }
 
     function getCurrentTimeLabel() {
@@ -525,7 +550,7 @@
         try { const resp = await fetch(`${API_BASE}/4/system`); const data = await resp.json(); let osName = data.os_name || 'Linux'; if (osName === 'Linux') osName = 'Ubuntu 24.04 LTS'; document.getElementById('osInfo').innerText = osName; document.getElementById('kernelInfo').innerText = data.os_version || 'Linux'; } catch(e) { console.error(e); }
     }
     async function fetchUptime() {
-        try { const resp = await fetch(`${API_BASE}/4/uptime`); const data = await resp.json(); if (typeof data === 'string') { document.getElementById('serverUptime').innerText = parseUptimeToRussian(data); } else if (data && typeof data.uptime === 'number') { const sec = data.uptime; const d = Math.floor(sec/86400), h = Math.floor((sec%86400)/3600), m = Math.floor((sec%3600)/60), s = sec%60; let parts = []; if (d>0) parts.push(`${d} ${declOfNum(d,['день','дня','дней'])}`); if (h>0) parts.push(`${h} ${declOfNum(h,['час','часа','часов'])}`); if (m>0) parts.push(`${m} ${declOfNum(m,['минута','минуты','минут'])}`); if (s>0) parts.push(`${s} ${declOfNum(s,['секунда','секунды','секунд'])}`); if (parts.length===0) parts.push('только что'); document.getElementById('serverUptime').innerText = parts.join(' '); } else { document.getElementById('serverUptime').innerText = 'недоступно'; } } catch(e) { console.error(e); document.getElementById('serverUptime').innerText = 'ошибка'; }
+        try { const resp = await fetch(`${API_BASE}/4/uptime`); const data = await resp.json(); document.getElementById('serverUptime').innerText = parseUptimeToRussian(data); } catch(e) { console.error(e); document.getElementById('serverUptime').innerText = 'ошибка'; }
     }
     async function fetchContainers() {
         try { const resp = await fetch(`${API_BASE}/4/containers`); if (!resp.ok) throw new Error('Containers API not available'); const containers = await resp.json(); if (Array.isArray(containers)) { const bot = containers.find(c => c.name === 'bocchi_bot'); if (bot) { document.getElementById('botLed').className = 'led led-green'; document.getElementById('botStatusText').className = 'status-text-green'; document.getElementById('botStatusText').innerText = 'Бот онлайн'; } else { document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; } } else { document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; } } catch(e) { console.error('Containers error', e); document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; }
