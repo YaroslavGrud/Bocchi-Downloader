@@ -38,8 +38,10 @@ After=network.target
 
 [Service]
 Type=simple
+ExecStartPre=/bin/bash -c 'fuser -k 61208/tcp 2>/dev/null || true'
 ExecStart=/root/.local/bin/glances -w --bind 0.0.0.0 --port 61208 -t 1 --disable-plugin smart --disable-plugin gpu
 Restart=on-failure
+RestartSec=5
 User=root
 
 [Install]
@@ -66,13 +68,15 @@ cat > /etc/nginx/sites-available/dashboard << 'EOF'
 server {
     listen 61209;
     server_name _;
+
     root /var/www/dashboard;
     index index.html;
 
     location /api/ {
-        proxy_pass http://127.0.0.1:61208/;
-        proxy_set_header Host $host;
+        proxy_pass http://127.0.0.1:61208;
+        proxy_set_header Host 127.0.0.1:61208;
         proxy_set_header X-Real-IP $remote_addr;
+        rewrite ^/api/(.*) /api/$1 break;
     }
 
     location / {
