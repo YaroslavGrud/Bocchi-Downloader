@@ -1,34 +1,35 @@
 # (c) 2026 Hanako
 # Bocchi Downloader (Server Edition)
-# Полная версия со всеми исправлениями (NameError, sendMessageDraft, отмена загрузки, логи).
+# Исправленная версия: черновик "Ожидаю новое сообщение" заменён на обычное сообщение с автоудалением.
+# Добавлены пояснения при отправке ссылок в облако.
 # Работает с python-telegram-bot 21.6
 
 import asyncio
-import aiohttp
+import contextlib
+import gc
+import io
+import json
 import logging
 import os
-import json
 import random
 import re
 import shutil
 import subprocess
 import time
-import urllib.parse
 import uuid
 from pathlib import Path
-import io
-import gc
-import contextlib
+from urllib.parse import urlparse, parse_qs
 
+import aiohttp
 import psutil
+from PIL import Image
 from catboxpy import AsyncCatboxClient, LitterboxClient
 from dotenv import load_dotenv
+from mutagen import File
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
+from mutagen.id3 import ID3, USLT, TDRC, TCON, APIC, TPE2
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
-from mutagen import File
-from PIL import Image
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 )
@@ -38,9 +39,6 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, ConversationHandler, filters
 )
 from yandex_music import ClientAsync
-
-# ---------- ИСПРАВЛЕНИЕ NameError: urlparse и parse_qs теперь импортированы ----------
-from urllib.parse import urlparse, parse_qs
 
 # ---------------------- НАСТРОЙКА ЛОГИРОВАНИЯ ----------------------
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -120,10 +118,10 @@ main_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True)
 
 
 # ======================================================================
-# ФУНКЦИЯ ДЛЯ ОТПРАВКИ sendMessageDraft (реализована через bot._post)
+# ФУНКЦИЯ ДЛЯ ОТПРАВКИ sendMessageDraft (оставлена для анимации)
 # ======================================================================
 async def _send_message_draft(bot, chat_id, draft_id, text):
-    """Отправляет черновик сообщения с эффектом «печати» (streaming), используя метод sendMessageDraft."""
+    """Отправляет черновик сообщения с эффектом «печати» (streaming)."""
     try:
         await bot._post(
             "sendMessageDraft",
@@ -135,6 +133,46 @@ async def _send_message_draft(bot, chat_id, draft_id, text):
         )
     except Exception as e:
         logger.error(f"Ошибка отправки черновика: {e}")
+
+
+# ======================================================================
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ АВТОУДАЛЕНИЯ СООБЩЕНИЙ
+# ======================================================================
+async def delete_message_after(bot, chat_id, message_id, delay):
+    """Удаляет сообщение через указанное количество секунд."""
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение {message_id}: {e}")
+
+
+# ======================================================================
+# ОТПРАВКА СООБЩЕНИЙ С АНИМАЦИЕЙ (ЗАМЕНЁН ЧЕРНОВИК "ОЖИДАЮ НОВОЕ")
+# ======================================================================
+async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
+    """
+    Отправляет сообщение с анимацией (черновик для эффекта печати),
+    после чего отправляет обычное сообщение «⏳ Ожидаю новое сообщение» и удаляет его через 5 секунд.
+    """
+    draft_id = int(time.time() * 1000) + random.randint(1, 10000)
+    for attempt in range(max_retries):
+        try:
+            # Черновик с анимационным текстом
+            await _send_message_draft(bot, chat_id, draft_id, text)
+            await asyncio.sleep(delay)
+            # Основное сообщение
+            msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            # Обычное сообщение-заглушка (будет удалено)
+            wait_msg = await bot.send_message(chat_id=chat_id, text="⏳ Ожидаю новое сообщение")
+            asyncio.create_task(delete_message_after(bot, chat_id, wait_msg.message_id, 5))
+            return msg
+        except Exception as e:
+            logger.warning(f"Анимация {attempt+1}: {e}")
+            if attempt == max_retries - 1:
+                return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            await asyncio.sleep(0.5 * (attempt + 1))
+    return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
 
 
 # ======================================================================
@@ -426,34 +464,6 @@ def parse_yandex_url(url: str):
 
 
 # ======================================================================
-# АНИМИРОВАННАЯ ОТПРАВКА СООБЩЕНИЙ (ВКЛЮЧАЯ send_animated_message)
-# ======================================================================
-
-async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **kwargs):
-    draft_id = int(time.time() * 1000) + random.randint(1, 10000)
-    for attempt in range(max_retries):
-        try:
-            await _send_message_draft(bot, chat_id, draft_id, text)
-            await asyncio.sleep(delay)
-            msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            await _send_message_draft(bot, chat_id, draft_id, "⏳ Ожидаю новое сообщение")
-            return msg
-        except Exception as e:
-            logger.warning(f"Анимация {attempt+1}: {e}")
-            if attempt == max_retries - 1:
-                return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-            await asyncio.sleep(0.5 * (attempt + 1))
-    return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
-
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_animated_message(context.bot, update.effective_chat.id,
-                                "🎸 Главное меню:", reply_markup=main_markup)
-
-async def show_main_menu_from_chat(bot, chat_id):
-    await send_animated_message(bot, chat_id, "🎸 Главное меню:", reply_markup=main_markup)
-
-
-# ======================================================================
 # КОМАНДА /quality
 # ======================================================================
 
@@ -475,18 +485,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_message_too_old(update): return
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
-
-    old = context.user_data.get('status_draft')
-    if old:
-        try:
-            await _send_message_draft(context.bot, old['chat_id'], old['draft_id'], "⏹️ Статус прерван")
-        except: pass
-        context.user_data.pop('status_draft', None)
-
     draft_id = int(time.time() * 1000) + user_id
+
+    # 1. Отправляем начальный черновик (если ошибка – выходим)
     try:
         await _send_message_draft(context.bot, chat_id, draft_id,
-                                             "🌸 Секретный блокнот Хитори 🎸\n\nПодожди, собираю данные...")
+                                  "🌸 Секретный блокнот Хитори 🎸\n\nПодожди, собираю данные...")
         context.user_data['status_draft'] = {'draft_id': draft_id, 'chat_id': chat_id}
     except Exception as e:
         logger.error(f"Ошибка запуска черновика: {e}")
@@ -494,6 +498,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu(update, context)
         return
 
+    # 2. Основной блок (цикл и финальное сообщение) обёрнут в try-finally
     try:
         steps = 8
         anim_frames = ["🎸", "🎧", "🌸", "🎵"]
@@ -551,18 +556,27 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Ошибка обновления черновика (шаг {step}, попытка {retry+1}): {e}")
                     if retry == 1:
                         await context.bot.send_message(chat_id, "❌ Ошибка при обновлении статуса.")
-                        await _send_message_draft(context.bot, chat_id, draft_id, "📊 Статус завершён")
-                        context.user_data.pop('status_draft', None)
-                        await show_main_menu(update, context)
-                        return
+                        await _send_message_draft(context.bot, chat_id, draft_id, "📊 Статус прерван")
+                        return   # выходим, но finally всё равно выполнится
                     await asyncio.sleep(0.5)
             await asyncio.sleep(2)
-    finally:
+
+        # Если цикл завершился успешно – отправляем финальное сообщение
+        await _send_message_draft(context.bot, chat_id, draft_id, "📊 Статус завершён")
+        done_msg = await context.bot.send_message(chat_id, "📊 Статус завершён")
+        asyncio.create_task(delete_message_after(context.bot, chat_id, done_msg.message_id, 5))
+
+    except Exception as e:
+        logger.error(f"Ошибка во время выполнения статуса: {e}")
         try:
-            await _send_message_draft(context.bot, chat_id, draft_id, "📊 Статус завершён")
-        except: pass
+            await context.bot.send_message(chat_id, "❌ Произошла ошибка при формировании статуса.")
+        except:
+            pass
+    finally:
+        # Очищаем данные о черновике в любом случае
         context.user_data.pop('status_draft', None)
 
+    # Показываем главное меню после завершения
     await show_main_menu(update, context)
 
 
@@ -706,16 +720,9 @@ async def _safe_edit_callback(update, text):
 # ======================================================================
 
 async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback=False):
-    """
-    Отменяет все текущие загрузки пользователя в чате.
-    Если активный трек уже был скачан, он будет отправлен с уведомлением.
-    Сообщения об ошибках ("не удалось скачать", "нехватка памяти") не выводятся.
-    Логирует только факт отмены.
-    """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    # Собираем задачи этого чата
     tasks_to_cancel = [(tid, info) for tid, info in current_task_info.items() if info.get('chat_id') == chat_id]
 
     if not tasks_to_cancel:
@@ -727,7 +734,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                 await update.message.reply_text(msg)
         return
 
-    # Отправляем уведомление о начале отмены
     notify_text = "🛑 Отменяю загрузку…"
     if is_callback:
         await update.callback_query.answer()
@@ -744,7 +750,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
         task = info['task']
         tmp_dir = info.get('tmp_dir')
 
-        # Убиваем процесс, если жив
         if proc and not proc.returncode:
             try:
                 proc.kill()
@@ -752,7 +757,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
             except Exception:
                 pass
 
-        # Пытаемся отправить последний скачанный трек (один раз)
         if not last_track_sent and tmp_dir and tmp_dir.exists():
             files = list(tmp_dir.rglob('*.mp3')) + list(tmp_dir.rglob('*.m4a'))
             if files:
@@ -763,7 +767,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                 final_path = f_path.with_name(safe_name)
                 f_path.rename(final_path)
 
-                # Обложка
                 thumb = None
                 cover_bytes = task.get('cover_bytes')
                 embedded_cover = extract_cover_from_audio(final_path) or cover_bytes
@@ -781,24 +784,29 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                                 timeout=CLOUD_TIMEOUT
                             )
                             if url:
+                                explanation = "🔗 Трек превышает 50 МБ, поэтому он загружен в облачное хранилище на 24 часа.\nСсылка действительна в течение суток, скачайте её сейчас:"
                                 await context.bot.send_message(
                                     chat_id,
-                                    f"🎁 Ссылка на последний трек (24ч):\n{url}",
+                                    f"{explanation}\n{url}",
                                     disable_web_page_preview=True
                                 )
                                 uploaded = True
                         except Exception:
                             pass
                         if not uploaded:
-                            catbox = AsyncCatboxClient()
-                            url = await asyncio.wait_for(catbox.upload(str(final_path)), timeout=CLOUD_TIMEOUT)
-                            if url:
-                                await context.bot.send_message(
-                                    chat_id,
-                                    f"🎁 Постоянная ссылка на последний трек:\n{url}",
-                                    disable_web_page_preview=True
-                                )
-                                uploaded = True
+                            try:
+                                catbox = AsyncCatboxClient()
+                                url = await asyncio.wait_for(catbox.upload(str(final_path)), timeout=CLOUD_TIMEOUT)
+                                if url:
+                                    explanation = "🔗 Трек превышает 50 МБ, поэтому он загружен в постоянное облачное хранилище.\nСсылка не истекает, вы можете скачать её в любой момент:"
+                                    await context.bot.send_message(
+                                        chat_id,
+                                        f"{explanation}\n{url}",
+                                        disable_web_page_preview=True
+                                    )
+                                    uploaded = True
+                            except Exception:
+                                pass
                         if not uploaded:
                             await context.bot.send_message(chat_id, "⚠️ Не удалось загрузить последний трек в облако.")
                     else:
@@ -819,7 +827,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                 except Exception as e:
                     logger.warning(f"Не удалось отправить последний трек при отмене: {e}")
 
-        # Удаляем статусное сообщение
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             with contextlib.suppress(Exception):
@@ -828,7 +835,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
         current_task_info.pop(task_id, None)
         cancelled_count += 1
 
-    # Убираем оставшиеся задачи пользователя из очереди
     remaining = []
     removed_from_queue = 0
     while not download_queue.empty():
@@ -843,7 +849,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
     for t in remaining:
         await download_queue.put(t)
 
-    # Обновляем счётчик
     global active_tasks_count
     active_tasks_count -= (cancelled_count + removed_from_queue)
     if active_tasks_count < 0:
@@ -861,7 +866,6 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
 
 
 async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик inline-кнопки отмены загрузки."""
     await cancel_download(update, context, is_callback=True)
 
 
@@ -870,16 +874,9 @@ async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT
 # ======================================================================
 
 async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Экстренная остановка: убивает все процессы, удаляет временные файлы,
-    очищает очередь без отправки последнего трека.
-    Пользователю показывается только сообщение об остановке.
-    Логирует только факт экстренной остановки.
-    """
     chat_id = update.effective_chat.id
     await update.message.reply_text("🛑 Экстренная остановка…")
 
-    # Убиваем все процессы и удаляем временные папки
     for task_id, info in list(current_task_info.items()):
         proc = info.get('process')
         if proc and not proc.returncode:
@@ -889,20 +886,17 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-        # Удаляем статусное сообщение
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             with contextlib.suppress(Exception):
                 await context.bot.delete_message(chat_id=info['chat_id'], message_id=msg_id)
 
-        # Удаляем временную папку задачи
         tmp_dir = info.get('tmp_dir')
         if tmp_dir and tmp_dir.exists():
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
         current_task_info.pop(task_id, None)
 
-    # Очищаем очередь полностью
     while not download_queue.empty():
         try:
             download_queue.get_nowait()
@@ -1323,7 +1317,7 @@ def load_queue_state():
 
 
 # ======================================================================
-# ВОРКЕР (СКАЧИВАНИЕ, ОБРАБОТКА ТЕГОВ, ОТПРАВКА) – ИСПРАВЛЕН
+# ВОРКЕР (СКАЧИВАНИЕ, ОБРАБОТКА ТЕГОВ, ОТПРАВКА)
 # ======================================================================
 
 async def worker_loop(app):
@@ -1404,7 +1398,7 @@ async def worker_loop(app):
                         "task": task,
                         "process": None,
                         "status_msg_id": status_msg.message_id,
-                        "tmp_dir": tmp_dir   # для отмены с отправкой последнего трека
+                        "tmp_dir": tmp_dir
                     }
 
                     async def run_downloader(quality, tmp_path):
@@ -1575,21 +1569,33 @@ async def worker_loop(app):
                             uploaded = False
                             try:
                                 litterbox = LitterboxClient()
-                                url = await asyncio.wait_for(asyncio.to_thread(litterbox.upload_file, str(final_path), expire_time="24h"), timeout=CLOUD_TIMEOUT)
+                                url = await asyncio.wait_for(
+                                    asyncio.to_thread(litterbox.upload_file, str(final_path), expire_time="24h"),
+                                    timeout=CLOUD_TIMEOUT
+                                )
                                 if url:
-                                    await app.bot.send_message(chat_id, f"🎁 Ссылка (24ч):\n{url}", disable_web_page_preview=True)
+                                    explanation = (
+                                        "🔗 Трек превышает 50 МБ, поэтому он загружен в облачное хранилище на 24 часа.\n"
+                                        f"Ссылка: {url}"
+                                    )
+                                    await app.bot.send_message(chat_id, explanation, disable_web_page_preview=True)
                                     uploaded = True
-                            except:
-                                pass
+                            except Exception as e:
+                                logger.warning(f"Litterbox upload failed: {e}")
                             if not uploaded:
                                 try:
                                     catbox = AsyncCatboxClient()
                                     url = await asyncio.wait_for(catbox.upload(str(final_path)), timeout=CLOUD_TIMEOUT)
                                     if url:
-                                        await app.bot.send_message(chat_id, f"🎁 Постоянная ссылка:\n{url}", disable_web_page_preview=True)
+                                        explanation = (
+                                            "🔗 Трек превышает 50 МБ, поэтому он загружен в постоянное облачное хранилище.\n"
+                                            "Ссылка не истекает, вы можете скачать трек в любой момент:\n"
+                                            f"Ссылка: {url}"
+                                        )
+                                        await app.bot.send_message(chat_id, explanation, disable_web_page_preview=True)
                                         uploaded = True
-                                except:
-                                    pass
+                                except Exception as e:
+                                    logger.warning(f"Catbox upload failed: {e}")
                             if not uploaded:
                                 await app.bot.send_message(chat_id, "❌ Не удалось загрузить файл в облако.")
                         else:
@@ -1667,6 +1673,13 @@ async def check_all_tokens(app):
             changed = True
     if changed:
         save_user_tokens()
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_animated_message(context.bot, update.effective_chat.id,
+                                "🎸 Главное меню:", reply_markup=main_markup)
+
+async def show_main_menu_from_chat(bot, chat_id):
+    await send_animated_message(bot, chat_id, "🎸 Главное меню:", reply_markup=main_markup)
 
 
 # ======================================================================
