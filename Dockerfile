@@ -1,4 +1,4 @@
-FROM python:3.13.13-slim
+FROM python:3.14.0-slim
 
 # 1. Установка системных зависимостей
 RUN apt-get update && apt-get install -y --no-install-recommends \
