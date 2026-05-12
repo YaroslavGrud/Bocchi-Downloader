@@ -229,6 +229,11 @@ def extract_base_url(url):
         return base
     return "https://music.yandex.ru"
 
+def is_valid_api_identifier(value, pattern):
+    """Проверяет, что идентификатор полностью соответствует безопасному шаблону."""
+    return isinstance(value, str) and re.fullmatch(pattern, value) is not None
+
+
 def parse_yandex_url(url):
     """Определяет тип ссылки (трек, альбом, плейлист) и возвращает его идентификатор."""
     p = urlparse(url)
@@ -284,6 +289,20 @@ async def collect_tracks_from_links(links):
             cprint(f"❌ Не удалось распознать ссылку: {url}", 'err')
             continue
         typ, cid, username = parsed
+
+        # Защита от partial SSRF: используем только строго валидные идентификаторы в URL API.
+        if typ in ('track', 'album'):
+            if not is_valid_api_identifier(cid, r'\d+'):
+                cprint(f"❌ Некорректный идентификатор {typ}: {url}", 'err')
+                continue
+        elif typ == 'playlist':
+            if not is_valid_api_identifier(cid, r'[a-zA-Z0-9_.-]+'):
+                cprint(f"❌ Некорректный идентификатор плейлиста: {url}", 'err')
+                continue
+            if username is not None and not is_valid_api_identifier(username, r'[a-zA-Z0-9_.-]+'):
+                cprint(f"❌ Некорректный владелец плейлиста: {url}", 'err')
+                continue
+
         try:
             if typ == 'track':
                 tracks = await asyncio.to_thread(client.tracks, [cid])
