@@ -3,7 +3,7 @@ aiosignal==1.4.0
 APScheduler==3.11.2
 attrs==25.4.0
 certifi==2026.1.4
-charset-normalizer==3.4.4
+charset-normalizer==3.4.7
 frozenlist==1.8.0
 idna==3.11
 multidict==6.7.1
