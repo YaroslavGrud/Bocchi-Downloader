@@ -1326,7 +1326,8 @@ async def worker_loop(app):
 
     while True:
         if not shutil.which(DOWNLOADER_PATH):
-            logger.error(f"Загрузчик {DOWNLOADER_PATH} не найден!")
+            safe_downloader_path = str(DOWNLOADER_PATH).replace("\r", "").replace("\n", "")
+            logger.error(f"Загрузчик {safe_downloader_path} не найден!")
             await asyncio.sleep(60)
             continue
 
