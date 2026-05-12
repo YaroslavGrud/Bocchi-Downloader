@@ -13,25 +13,24 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6   # было v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4 # было v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v7 # было v5
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f
         with:
           context: .
           push: true
           tags: yaroslavgrud/bocchi-downloader-server-edition:latest
 
       - name: Docker Scout security scan
-        uses: docker/scout-action@v1
+        uses: docker/scout-action@bacf462e8d090c09660de30a6ccc718035f961e3
         with:
           command: cves
           image: yaroslavgrud/bocchi-downloader-server-edition:latest
-          # Не прерываем workflow при обнаружении уязвимостей
           exit-code: false
