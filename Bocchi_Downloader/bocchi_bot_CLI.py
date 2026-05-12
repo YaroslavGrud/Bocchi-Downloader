@@ -273,9 +273,6 @@ def extract_base_url(url):
         return base
     return "https://music.yandex.ru"
 
-def is_valid_api_identifier(value, pattern):
-    return isinstance(value, str) and re.fullmatch(pattern, value) is not None
-
 # ---------- расширенный парсинг URL (из серверной версии) ----------
 def parse_yandex_url(url):
     parsed = urlparse(url)
@@ -333,9 +330,11 @@ async def collect_tracks_from_links(links):
     async def api_request(url):
         headers = {"Authorization": f"OAuth {user_token}"}
         parsed = urlparse(url)
+
         if parsed.scheme != 'https' or parsed.hostname not in ALLOWED_API_HOSTS:
             cprint(f"❌ Заблокирован небезопасный URL API: {url}", 'err')
             return 0, None
+
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as r:
                 return r.status, await r.json() if r.status == 200 else None
@@ -360,61 +359,35 @@ async def collect_tracks_from_links(links):
             cprint(f"❌ Не удалось распознать ссылку: {url}", 'err')
             continue
 
-        # Дополнительная валидация идентификаторов (defense in depth)
-        # Важно: блокируем любые пользовательские значения до сборки URL для API.
+        # Дополнительная валидация идентификаторов перед формированием URL API
         if typ in ('track', 'album'):
-            if not cid or not id_digits_re.fullmatch(str(cid)):
+            if not (cid and id_digits_re.fullmatch(str(cid))):
                 cprint(f"❌ Некорректный идентификатор: {url}", 'err')
                 continue
+            safe_cid = str(cid)
         elif typ == 'playlist':
-            if (not cid or not id_digits_re.fullmatch(str(cid)) or
-                    not username or not owner_re.fullmatch(str(username))):
+            if not (cid and id_digits_re.fullmatch(str(cid)) and username and owner_re.fullmatch(str(username))):
                 cprint(f"❌ Некорректные параметры плейлиста: {url}", 'err')
                 continue
-        elif typ in ('uuid_playlist', 'iframe_playlist'):
-            if not cid or not id_digits_re.fullmatch(str(cid)):
-                cprint(f"❌ Некорректный kind плейлиста: {url}", 'err')
+            safe_cid = str(cid)
+        elif typ == 'iframe_playlist':
+            if not (cid and id_digits_re.fullmatch(str(cid)) and username and owner_re.fullmatch(str(username))):
+                cprint(f"❌ Некорректные параметры iframe-плейлиста: {url}", 'err')
                 continue
-            if not username or not (owner_re.fullmatch(str(username)) or uuid_re.fullmatch(str(username))):
-                cprint(f"❌ Некорректный owner плейлиста: {url}", 'err')
-                continue
-        if typ in ('track', 'album'):
-            if not cid or not id_digits_re.fullmatch(str(cid)):
-                cprint(f"❌ Некорректный идентификатор в ссылке: {url}", 'err')
-                continue
-        elif typ in ('playlist', 'iframe_playlist'):
-            if (
-                not cid or not id_digits_re.fullmatch(str(cid))
-                or not username or not owner_re.fullmatch(str(username))
-            ):
-                cprint(f"❌ Некорректные параметры плейлиста: {url}", 'err')
-                continue
+            safe_cid = str(cid)
         elif typ == 'uuid_playlist':
-            if (
-                not cid or not uuid_re.fullmatch(str(cid))
-                or not username or not owner_re.fullmatch(str(username))
-            ):
+            if not (cid and uuid_re.fullmatch(str(cid)) and username and owner_re.fullmatch(str(username))):
                 cprint(f"❌ Некорректные параметры uuid-плейлиста: {url}", 'err')
                 continue
-        if typ in ('track', 'album'):
-            if not is_valid_api_identifier(str(cid), r'\d+'):
-                cprint(f"❌ Некорректный ID {typ}: {url}", 'err')
-                continue
-        elif typ in ('playlist', 'iframe_playlist'):
-            if not is_valid_api_identifier(str(cid), r'\d+'):
-                cprint(f"❌ Некорректный ID плейлиста: {url}", 'err')
-                continue
-            if username and not is_valid_api_identifier(username, r'[a-zA-Z0-9_.\-]+'):
-                cprint(f"❌ Некорректное имя владельца: {url}", 'err')
-                continue
-        elif typ == 'uuid_playlist':
-            if not is_valid_api_identifier(str(cid), r'[a-z0-9\-\.]+'):
-                cprint(f"❌ Некорректный UUID плейлиста: {url}", 'err')
-                continue
+            safe_cid = str(cid)
+        else:
+            # неизвестный тип
+            cprint(f"❌ Неизвестный тип ссылки: {url}", 'err')
+            continue
 
         try:
             if typ == 'track':
-                tracks = await asyncio.to_thread(client.tracks, [cid])
+                tracks = await asyncio.to_thread(client.tracks, [safe_cid])
                 if tracks and tracks[0]:
                     t = tracks[0]
                     artist = ', '.join(a.name for a in t.artists) or "Неизвестен"
@@ -442,7 +415,7 @@ async def collect_tracks_from_links(links):
 
             elif typ == 'album':
                 status, data = await api_request(
-                    f"https://api.music.yandex.net/albums/{cid}/with-tracks"
+                    f"https://api.music.yandex.net/albums/{safe_cid}/with-tracks"
                 )
                 if status != 200 or not data:
                     cprint(f"❌ Альбом не найден: {url}", 'err')
@@ -476,16 +449,15 @@ async def collect_tracks_from_links(links):
                         })
 
             elif typ in ('playlist', 'uuid_playlist', 'iframe_playlist'):
-                cid_str = str(cid)
                 # Пропускаем персональные подборки
-                if cid_str.startswith(('ps.', 'lk.', 'pl.')):
-                    cprint(f"⚠️ Плейлист «{cid_str}» — персональная подборка, пропущен.", 'warn')
+                if safe_cid.startswith(('ps.', 'lk.', 'pl.')):
+                    cprint(f"⚠️ Плейлист «{safe_cid}» — персональная подборка, пропущен.", 'warn')
                     continue
 
                 # Пробуем разные endpoints
-                endpoints = [f"https://api.music.yandex.net/playlists/{cid_str}"]
+                endpoints = [f"https://api.music.yandex.net/playlists/{safe_cid}"]
                 if username:
-                    endpoints.append(f"https://api.music.yandex.net/users/{username}/playlists/{cid_str}")
+                    endpoints.append(f"https://api.music.yandex.net/users/{username}/playlists/{safe_cid}")
 
                 success = False
                 for ep in endpoints:
@@ -627,6 +599,7 @@ async def download_track(task, cancel_event):
 
         await asyncio.sleep(2)
 
+        download_dir_resolved = DOWNLOAD_DIR.resolve()
         files_found = False
         for f in tmp.rglob('*'):
             if f.suffix.lower() not in ('.mp3', '.m4a'):
@@ -680,9 +653,11 @@ async def download_track(task, cancel_event):
             safe_name = re.sub(r'[\\/*?:"<>|]', "", raw_name)
             # Дополнительно убираем возможные переходы по директориям
             safe_name = safe_name.replace('..', '_').replace('/', '_').replace('\\', '_')
-            dest = (DOWNLOAD_DIR / safe_name).resolve()
+            dest = (download_dir_resolved / safe_name).resolve()
             # Проверяем, что итоговый путь остаётся внутри DOWNLOAD_DIR
-            if not str(dest).startswith(str(DOWNLOAD_DIR.resolve())):
+            try:
+                dest.relative_to(download_dir_resolved)
+            except ValueError:
                 cprint(f"⚠️ Некорректный путь сохранения: {dest}", 'err')
                 continue
             try:
