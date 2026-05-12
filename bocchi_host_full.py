@@ -55,10 +55,11 @@ DATA_DIR.mkdir(exist_ok=True)
 def _resolve_stats_file_path(raw_stats_file: str) -> Path:
     base_dir = DATA_DIR.resolve()
     default_path = (base_dir / "stats.txt").resolve()
+    safe_stats_file = raw_stats_file.replace("\r", "").replace("\n", "")
 
     raw_path = Path(raw_stats_file)
     if raw_path.is_absolute():
-        logger.warning("Небезопасный STATS_FILE '%s', используется значение по умолчанию.", raw_stats_file)
+        logger.warning("Небезопасный STATS_FILE '%s', используется значение по умолчанию.", safe_stats_file)
         return default_path
 
     safe_parts = []
@@ -66,7 +67,7 @@ def _resolve_stats_file_path(raw_stats_file: str) -> Path:
         if part in ("", "."):
             continue
         if part == "..":
-            logger.warning("Небезопасный STATS_FILE '%s', используется значение по умолчанию.", raw_stats_file)
+            logger.warning("Небезопасный STATS_FILE '%s', используется значение по умолчанию.", safe_stats_file)
             return default_path
         safe_parts.append(part)
 
@@ -75,7 +76,6 @@ def _resolve_stats_file_path(raw_stats_file: str) -> Path:
     if candidate == base_dir or base_dir in candidate.parents:
         return candidate
 
-    safe_stats_file = raw_stats_file.replace("\r", "").replace("\n", "")
     logger.warning("Небезопасный STATS_FILE '%s', используется значение по умолчанию.", safe_stats_file)
     return default_path
 
