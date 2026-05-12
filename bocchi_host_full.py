@@ -415,19 +415,19 @@ def cleanup_old_tmp_dirs():
 def add_stats(bytes_added: int):
     try:
         current = 0.0
-        if os.path.exists(STATS_FILE):
-            with open(STATS_FILE, "r") as f:
+        if STATS_FILE_PATH.exists():
+            with open(STATS_FILE_PATH, "r") as f:
                 current = float(f.read())
-        with open(STATS_FILE, "w") as f:
+        with open(STATS_FILE_PATH, "w") as f:
             f.write(str(current + bytes_added))
     except:
         pass
 
 def get_formatted_stats() -> str:
     try:
-        if not os.path.exists(STATS_FILE):
+        if not STATS_FILE_PATH.exists():
             return "0 Б"
-        with open(STATS_FILE, "r") as f:
+        with open(STATS_FILE_PATH, "r") as f:
             val = float(f.read())
         for unit in ['Б', 'КБ', 'МБ', 'ГБ']:
             if val < 1024.0:
