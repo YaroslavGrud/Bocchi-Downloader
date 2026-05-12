@@ -51,10 +51,27 @@ logger = logging.getLogger("BocchiStation")
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
 
+
+def _resolve_stats_file_path(raw_stats_file: str) -> Path:
+    base_dir = DATA_DIR.resolve()
+    candidate = Path(raw_stats_file)
+    if not candidate.is_absolute():
+        candidate = (base_dir / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    if candidate == base_dir or base_dir in candidate.parents:
+        return candidate
+
+    logger.warning("Небезопасный STATS_FILE '%s', используется значение по умолчанию.", raw_stats_file)
+    return (base_dir / "stats.txt").resolve()
+
+
 # ---------------------- КОНФИГУРАЦИЯ ----------------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
 DOWNLOADER_PATH = os.getenv("DOWNLOADER_PATH", "yandex-music-downloader")
 STATS_FILE = os.getenv("STATS_FILE", "data/stats.txt")
+STATS_FILE_PATH = _resolve_stats_file_path(STATS_FILE)
 MAX_LINKS = int(os.getenv("MAX_LINKS", "10"))
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "600"))
 TOKEN_LIFETIME = int(os.getenv("TOKEN_LIFETIME", "86400"))
@@ -1708,8 +1725,9 @@ async def post_init(app):
 def main():
     global worker_task, token_checker_task, memory_cleaner_task
     cleanup_old_tmp_dirs()
-    if not os.path.exists(STATS_FILE):
-        with open(STATS_FILE, "w") as f:
+    if not STATS_FILE_PATH.exists():
+        STATS_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(STATS_FILE_PATH, "w") as f:
             f.write("0")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
