@@ -405,7 +405,7 @@ def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
 
 def cleanup_old_tmp_dirs():
     cnt = 0
-    for tmp_dir in Path('.').glob('bocchi_tmp_*'):
+    for tmp_dir in Path('/tmp').glob('bocchi_tmp_*'):
         if tmp_dir.is_dir():
             shutil.rmtree(tmp_dir, ignore_errors=True)
             cnt += 1
@@ -1364,7 +1364,7 @@ async def worker_loop(app):
         try:
             task = await download_queue.get()
             worker_busy = True
-            tmp_dir = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
+            tmp_dir = Path(f"/tmp/bocchi_tmp_{uuid.uuid4().hex}")
             current_quality = task.get('quality', DEFAULT_QUALITY)
             task_id = f"{task['batch_id']}_{task['batch_index']}"
             chat_id = task['chat_id']
