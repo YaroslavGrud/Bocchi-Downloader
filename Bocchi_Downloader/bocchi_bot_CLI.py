@@ -270,6 +270,10 @@ async def collect_tracks_from_links(links):
 
     async def api_request(url):
         headers = {"Authorization": f"OAuth {user_token}"}
+        parsed_url = urlparse(url)
+        if parsed_url.scheme != "https" or parsed_url.netloc != "api.music.yandex.net":
+            cprint(f"❌ Заблокирован небезопасный URL API: {url}", 'err')
+            return 0, None
         async with aiohttp.ClientSession() as s:
             async with s.get(url, headers=headers) as r:
                 return r.status, await r.json() if r.status == 200 else None
