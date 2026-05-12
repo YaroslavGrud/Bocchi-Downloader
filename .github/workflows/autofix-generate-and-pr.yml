@@ -1,0 +1,190 @@
+name: "Autofix: Generate & PR per alert"
+
+on:
+  workflow_dispatch:
+    inputs:
+      per_page:
+        description: 'Max alerts to process (0 = all)'
+        required: false
+        default: '0'
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: read
+
+jobs:
+  autofix-per-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Process alerts and create PRs
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const maxAlerts = parseInt(process.env.PER_PAGE) || 0;
+
+            // 1. Получить открытые CodeQL-алерты
+            const alerts = await github.paginate(
+              github.rest.codeScanning.listAlertsForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                tool_name: 'CodeQL',
+                per_page: 100,
+              }
+            );
+
+            let toProcess = alerts;
+            if (maxAlerts > 0) {
+              toProcess = alerts.slice(0, maxAlerts);
+            }
+
+            console.log(`Found ${alerts.length} open CodeQL alerts. Processing up to ${toProcess.length}.`);
+
+            // 2. Обрабатываем каждый алерт
+            for (const alert of toProcess) {
+              const alertNumber = alert.number;
+              console.log(`\n=== Alert #${alertNumber}: ${alert.rule.description} ===`);
+
+              // Шаг А: запросить генерацию autofix
+              try {
+                await github.rest.codeScanning.requestAutofix({
+                  owner,
+                  repo,
+                  alert_number: alertNumber,
+                });
+                console.log(`  ✓ Fix generation requested`);
+              } catch (err) {
+                if (err.status === 422) {
+                  console.log(`  ⚠ Generation may not be available or already generated. Proceeding to check.`);
+                } else if (err.status === 404) {
+                  console.log(`  ✗ Alert not found or no autofix support. Skipping.`);
+                  continue;
+                } else {
+                  console.error(`  ✗ Unexpected error requesting generation: ${err.message}`);
+                  continue;
+                }
+              }
+
+              // Шаг Б: ждать, пока статус станет "available" (до 60 минут)
+              const MAX_WAIT_MINUTES = 60;  // можно увеличить до 300 (5 часов) при необходимости
+              const POLL_INTERVAL_SECONDS = 10;
+              const startTime = Date.now();
+              let autofixData = null;
+
+              while (true) {
+                const elapsedMinutes = (Date.now() - startTime) / 60000;
+                if (elapsedMinutes > MAX_WAIT_MINUTES) {
+                  console.log(`  ⚠ Timeout after ${MAX_WAIT_MINUTES} min waiting for autofix. Skipping alert #${alertNumber}.`);
+                  break;
+                }
+
+                await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_SECONDS * 1000));
+
+                try {
+                  const resp = await github.rest.codeScanning.getAutofix({
+                    owner,
+                    repo,
+                    alert_number: alertNumber,
+                  });
+                  const data = resp.data;
+                  if (data.status === 'available') {
+                    autofixData = data;
+                    console.log(`  ✓ Autofix ready after ${Math.round(elapsedMinutes * 10) / 10} min.`);
+                    break;
+                  } else if (data.status === 'failed' || data.status === 'error') {
+                    console.log(`  ✗ Autofix generation ended with status: ${data.status}`);
+                    break;
+                  }
+                  console.log(`  ... still generating (${data.status}), waited ${Math.round(elapsedMinutes * 10) / 10} min`);
+                } catch (e) {
+                  console.error(`  ✗ Error polling autofix: ${e.message}`);
+                  break;
+                }
+              }
+
+              if (!autofixData || autofixData.status !== 'available') {
+                console.log(`  ✗ No successful autofix available after waiting.`);
+                continue;
+              }
+
+              // Шаг В: применить исправление в новой ветке и создать PR
+              const diff = autofixData.fix?.diff;
+              if (!diff) {
+                console.log(`  ✗ No diff returned in available fix.`);
+                continue;
+              }
+
+              const branchName = `autofix/alert-${alertNumber}-${Date.now()}`;
+              const baseRef = context.ref.replace('refs/heads/', '') || 'main';
+
+              // Создать ветку от актуального HEAD
+              const baseBranch = await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: `heads/${baseRef}`,
+              });
+              const baseSha = baseBranch.data.object.sha;
+
+              try {
+                await github.rest.git.createRef({
+                  owner,
+                  repo,
+                  ref: `refs/heads/${branchName}`,
+                  sha: baseSha,
+                });
+              } catch (e) {
+                if (e.status === 422) {
+                  console.log(`  ⚠ Branch ${branchName} already exists, using it.`);
+                } else throw e;
+              }
+
+              // Применить патч
+              const { execSync } = require('child_process');
+              const fs = require('fs');
+              const patchFile = `/tmp/autofix_${alertNumber}.patch`;
+              fs.writeFileSync(patchFile, diff);
+              execSync(`git fetch origin ${branchName} || true`);
+              execSync(`git checkout ${branchName}`);
+              try {
+                execSync(`git apply --verbose ${patchFile}`, { stdio: 'inherit' });
+              } catch (applyErr) {
+                console.error(`  ✗ Failed to apply patch: ${applyErr.message}`);
+                continue;
+              }
+
+              // Коммит и пуш
+              execSync(`git config user.name "github-actions[bot]"`);
+              execSync(`git config user.email "github-actions[bot]@users.noreply.github.com"`);
+              execSync(`git add -A`);
+              const statusOut = execSync(`git status --porcelain`).toString();
+              if (!statusOut.trim()) {
+                console.log(`  ✓ No changes after applying patch? Skipping PR.`);
+                continue;
+              }
+              const commitMsg = `🤖 Copilot Autofix: ${alert.rule.description}\n\nAlert: #${alertNumber}\nRule: ${alert.rule.id}`;
+              execSync(`git commit -m "${commitMsg}"`);
+              execSync(`git push origin ${branchName}`);
+
+              // Создать PR
+              const pr = await github.rest.pulls.create({
+                owner,
+                repo,
+                title: `🔧 Autofix for alert #${alertNumber}: ${alert.rule.description}`,
+                head: branchName,
+                base: baseRef,
+                body: `Автоматически сгенерированное исправление для CodeQL alert #${alertNumber}.\n\n**Уязвимость:** ${alert.rule.description}\n**Файл:** ${alert.most_recent_instance?.location?.path || 'не указан'}`,
+              });
+              console.log(`  🎉 PR created: ${pr.data.html_url}`);
+            }
+      env:
+        PER_PAGE: ${{ github.event.inputs.per_page || '0' }}
