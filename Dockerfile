@@ -6,6 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+# 1.1 Создаём непривилегированного пользователя (без пароля и домашней папки)
+RUN useradd --create-home --shell /bin/bash bocchi
+
 WORKDIR /app
 
 # 2. Установка yandex-music-api из исходников MarshalX (синхронная + async версии)
@@ -30,12 +33,15 @@ COPY . .
 # 6. Отключаем буферизацию вывода для логов
 ENV PYTHONUNBUFFERED=1
 
-# 7. Создаём папку для данных и настраиваем переменную
-RUN mkdir -p /app/data
+# 7. Создаём папку для данных и настраиваем переменную, меняем владельца на bocchi
+RUN mkdir -p /app/data && chown -R bocchi:bocchi /app/data
 ENV STATS_FILE=/app/data/stats.txt
 
-# 8. Скрипт для выбора версии бота
+# 8. Копируем entrypoint.sh и даём права на выполнение
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# 9. Переключаемся на непривилегированного пользователя
+USER bocchi
 
 ENTRYPOINT ["/entrypoint.sh"]
