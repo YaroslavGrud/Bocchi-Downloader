@@ -331,8 +331,11 @@ async def collect_tracks_from_links(links):
                 else:
                     cprint(f"❌ Трек не найден: {url}", 'err')
             elif typ == 'album':
-                safe_cid = quote(cid, safe='')
-                status, data = await api_request("https://api.music.yandex.net/albums/" + safe_cid + "/with-tracks")
+                # Defense in depth: enforce strict album id format at sink level.
+                if not re.fullmatch(r"\d+", str(cid)):
+                    cprint(f"❌ Некорректный идентификатор album: {url}", 'err')
+                    continue
+                status, data = await api_request("https://api.music.yandex.net/albums/" + str(cid) + "/with-tracks")
                 if status != 200 or not data:
                     cprint(f"❌ Альбом не найден: {url}", 'err')
                     continue
