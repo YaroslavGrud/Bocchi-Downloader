@@ -348,6 +348,11 @@ async def collect_tracks_from_links(links):
         return []
 
     all_tracks = []
+    id_digits_re = re.compile(r'^\d+$')
+    owner_re = re.compile(r'^[A-Za-z0-9._-]+$')
+    uuid_re = re.compile(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+    )
     for url in links:
         base = extract_base_url(url)
         typ, cid, username = parse_yandex_url(url)
@@ -356,6 +361,24 @@ async def collect_tracks_from_links(links):
             continue
 
         # Дополнительная валидация идентификаторов (defense in depth)
+        if typ in ('track', 'album'):
+            if not cid or not id_digits_re.fullmatch(str(cid)):
+                cprint(f"❌ Некорректный идентификатор в ссылке: {url}", 'err')
+                continue
+        elif typ in ('playlist', 'iframe_playlist'):
+            if (
+                not cid or not id_digits_re.fullmatch(str(cid))
+                or not username or not owner_re.fullmatch(str(username))
+            ):
+                cprint(f"❌ Некорректные параметры плейлиста: {url}", 'err')
+                continue
+        elif typ == 'uuid_playlist':
+            if (
+                not cid or not uuid_re.fullmatch(str(cid))
+                or not username or not owner_re.fullmatch(str(username))
+            ):
+                cprint(f"❌ Некорректные параметры uuid-плейлиста: {url}", 'err')
+                continue
         if typ in ('track', 'album'):
             if not is_valid_api_identifier(str(cid), r'\d+'):
                 cprint(f"❌ Некорректный ID {typ}: {url}", 'err')
