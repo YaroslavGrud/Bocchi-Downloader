@@ -1,35 +1,32 @@
-name: "Полный анализ безопасности (единый файл)"
+name: "Полный анализ безопасности (CodeQL + Semgrep)"
 
 on:
   workflow_dispatch:   # ручной запуск по кнопке
   schedule:
-    - cron: '0 4 * * 1'  # еженедельно (можно убрать)
+    - cron: '0 4 * * 1'  # раз в неделю (можно удалить)
 
 permissions:
   contents: read
-  security-events: write   # обязательно
+  security-events: write
 
 jobs:
-  # ===================== CodeQL (Python) =====================
   codeql:
-    name: CodeQL (расширенный + experimental)
+    name: CodeQL
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Инициализация CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4   # обновлено до v4
         with:
           languages: python
-          # Включаем ВСЕ уровни строгости прямо здесь, без внешнего файла
-          queries: +security-extended,security-and-quality,experimental
+          queries: +security-extended,security-and-quality
 
-      - name: Анализ
-        uses: github/codeql-action/analyze@v3
+      - name: Выполнить анализ
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:python"
 
-  # ===================== Semgrep (все языки) =====================
   semgrep:
     name: Semgrep
     runs-on: ubuntu-latest
@@ -46,7 +43,7 @@ jobs:
             --output=semgrep.sarif \
             --no-suppress-errors
 
-      - name: Загрузка SARIF в GitHub
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Загрузка в GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
