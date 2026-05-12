@@ -361,6 +361,23 @@ async def collect_tracks_from_links(links):
             continue
 
         # Дополнительная валидация идентификаторов (defense in depth)
+        # Важно: блокируем любые пользовательские значения до сборки URL для API.
+        if typ in ('track', 'album'):
+            if not cid or not id_digits_re.fullmatch(str(cid)):
+                cprint(f"❌ Некорректный идентификатор: {url}", 'err')
+                continue
+        elif typ == 'playlist':
+            if (not cid or not id_digits_re.fullmatch(str(cid)) or
+                    not username or not owner_re.fullmatch(str(username))):
+                cprint(f"❌ Некорректные параметры плейлиста: {url}", 'err')
+                continue
+        elif typ in ('uuid_playlist', 'iframe_playlist'):
+            if not cid or not id_digits_re.fullmatch(str(cid)):
+                cprint(f"❌ Некорректный kind плейлиста: {url}", 'err')
+                continue
+            if not username or not (owner_re.fullmatch(str(username)) or uuid_re.fullmatch(str(username))):
+                cprint(f"❌ Некорректный owner плейлиста: {url}", 'err')
+                continue
         if typ in ('track', 'album'):
             if not cid or not id_digits_re.fullmatch(str(cid)):
                 cprint(f"❌ Некорректный идентификатор в ссылке: {url}", 'err')
