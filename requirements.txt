@@ -1,4 +1,4 @@
-aiohttp==3.13.4
+aiohttp==3.13.5
 aiosignal==1.4.0
 APScheduler==3.11.2
 attrs==25.4.0
