@@ -3,6 +3,8 @@
 """
 Bocchi Downloader CLI — консольная версия загрузчика музыки с Яндекс.Музыки.
 Автор: Hanako (c) 2026
+Безопасная версия с защитой от SSRF, Path Traversal, Log Injection.
+Расширенная поддержка всех типов ссылок (включая uuid/iframe плейлисты).
 """
 
 import asyncio
@@ -48,12 +50,10 @@ def cprint(text, color='info'):
 if os.name == 'nt':
     import msvcrt
     def getch():
-        """Считывает один символ без ожидания Enter (Windows)."""
         return msvcrt.getch().decode('utf-8', errors='ignore')
 else:
     import termios, tty
     def getch():
-        """Считывает один символ без ожидания Enter (Linux / macOS)."""
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         try:
@@ -63,7 +63,7 @@ else:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
         return ch
 
-# ---------- папка для хранения данных (рядом с исполняемым файлом) ----------
+# ---------- папка для хранения данных ----------
 SCRIPT_DIR = Path(sys.argv[0]).parent.resolve()
 APP_DIR = SCRIPT_DIR / "Data"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,6 @@ TOKEN_FILE = APP_DIR / "token.json"
 
 # ---------- папка для загрузок (адаптирована под мобильные устройства) ----------
 def get_download_dir():
-    """Возвращает путь к папке загрузок, подходящий для разных ОС."""
     termux = Path("/data/data/com.termux/files/home/storage/downloads")
     if termux.exists():
         return termux / "BocchiDownloads"
@@ -109,6 +108,50 @@ DEFAULT_QUALITY = int(os.getenv("DEFAULT_QUALITY", "2"))
 MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))
 TRACK_DELAY_SECONDS = float(os.getenv("TRACK_DELAY_SECONDS", "2.0"))
 
+# ========== БЕЗОПАСНАЯ ОБРАБОТКА STATS_FILE (закрытие CWE-22, CWE-117) ==========
+DATA_DIR = APP_DIR
+
+def resolve_stats_file_path():
+    """
+    Безопасно определяет путь к файлу статистики.
+    Закрывает уязвимости Path Traversal (#43, #45) и Log Injection (#51).
+    """
+    raw_stats_file = os.getenv("STATS_FILE", "stats.txt")
+    # Защита от Log Injection: удаляем \r и \n
+    safe_for_log = raw_stats_file.replace("\r", "").replace("\n", "")
+
+    base_dir = DATA_DIR.resolve()
+    default_path = (base_dir / "stats.txt").resolve()
+
+    raw_path = Path(raw_stats_file)
+
+    if raw_path.is_absolute():
+        logger.warning("Небезопасный STATS_FILE '%s', используется значение по умолчанию.", safe_for_log)
+        return default_path
+
+    safe_parts = []
+    for part in raw_path.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            logger.warning("Небезопасный STATS_FILE '%s', используется значение по умолчанию.", safe_for_log)
+            return default_path
+        safe_parts.append(part)
+
+    try:
+        candidate = (base_dir / Path(*safe_parts)).resolve()
+    except Exception:
+        logger.warning("STATS_FILE вызвал ошибку разрешения пути: '%s'", safe_for_log)
+        return default_path
+
+    if candidate == base_dir or base_dir in candidate.parents:
+        return candidate
+    else:
+        logger.warning("STATS_FILE выходит за пределы DATA_DIR: '%s'", safe_for_log)
+        return default_path
+
+STATS_FILE_PATH = resolve_stats_file_path()
+
 QUALITY_NAMES = {0: "Низкое", 1: "Среднее", 2: "Высокое"}
 QUALITY_NAMES_GENITIVE = {0: "низкого", 1: "среднего", 2: "высокого"}
 
@@ -119,7 +162,6 @@ token_timestamp = 0
 
 # ---------- работа с токеном ----------
 def save_token(token):
-    """Сохраняет токен в файл."""
     global user_token, token_timestamp
     user_token = token
     token_timestamp = time.time()
@@ -129,10 +171,9 @@ def save_token(token):
             encoding='utf-8'
         )
     except Exception as e:
-        logger.error(f"Ошибка сохранения токена: {e}")
+        logger.error("Ошибка сохранения токена: %s", e)
 
 def load_token():
-    """Загружает токен из файла, если он ещё действителен."""
     global user_token, token_timestamp
     if not TOKEN_FILE.exists():
         return False
@@ -143,11 +184,10 @@ def load_token():
             token_timestamp = data['timestamp']
             return True
     except Exception as e:
-        logger.error(f"Ошибка загрузки токена: {e}")
+        logger.error("Ошибка загрузки токена: %s", e)
     return False
 
 def delete_token():
-    """Удаляет сохранённый токен."""
     global user_token, token_timestamp
     user_token = None
     token_timestamp = 0
@@ -157,16 +197,14 @@ def delete_token():
         pass
 
 def is_token_valid():
-    """Проверяет, действителен ли текущий токен."""
     return user_token and (time.time() - token_timestamp) <= TOKEN_LIFETIME
 
 # ---------- очистка при выходе ----------
 def cleanup():
-    """Удаляет временные файлы и старые логи."""
     logger.info("Очистка временных файлов...")
     try:
         for old in LOG_DIR.glob("bocchi_*.log"):
-            if old.stat().st_mtime < time.time() - 86400:  # старше 1 дня
+            if old.stat().st_mtime < time.time() - 86400:
                 old.unlink(missing_ok=True)
     except Exception:
         pass
@@ -180,17 +218,14 @@ atexit.register(cleanup)
 
 # ---------- вспомогательные функции ----------
 def clear_screen():
-    """Очищает экран консоли."""
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def wait_for_enter():
-    """Ожидает нажатия Enter для возврата в меню."""
     print()
     cprint("Нажмите Enter, чтобы вернуться в меню...", 'info')
     input()
 
 def get_plural_tracks(n):
-    """Возвращает правильное склонение для слова «трек»."""
     if n % 10 == 1 and n % 100 != 11:
         return f"{n} трек"
     if 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
@@ -198,28 +233,37 @@ def get_plural_tracks(n):
     return f"{n} треков"
 
 def check_disk_space():
-    """Проверяет, достаточно ли свободного места на диске."""
     try:
         free_mb = shutil.disk_usage(DOWNLOAD_DIR).free / (1024 * 1024)
         return free_mb >= MIN_FREE_DISK_MB, free_mb
     except Exception:
         return True, 9999
 
+# ---------- безопасная загрузка обложек (защита от SSRF) ----------
+ALLOWED_COVER_HOSTS = {
+    'avatars.yandex.net',
+    'music.yandex.ru',
+    'music.yandex.net',
+}
+
 async def fetch_cover(uri):
-    """Загружает обложку с Яндекс.Музыки."""
+    """Загружает обложку, проверяя безопасность URL."""
     if not uri:
         return None
     try:
+        raw_url = f"https://{uri.replace('%%', '1000x1000')}"
+        parsed = urlparse(raw_url)
+        if parsed.scheme != 'https' or parsed.hostname not in ALLOWED_COVER_HOSTS:
+            cprint(f"⚠️ Заблокирована небезопасная ссылка на обложку", 'warn')
+            return None
         async with aiohttp.ClientSession() as s:
-            url = f"https://{uri.replace('%%', '1000x1000')}"
-            async with s.get(url, timeout=aiohttp.ClientTimeout(15)) as r:
+            async with s.get(raw_url, timeout=aiohttp.ClientTimeout(15)) as r:
                 if r.status == 200:
                     return await r.read()
     except Exception:
         return None
 
 def extract_base_url(url):
-    """Извлекает базовый URL Яндекс.Музыки."""
     pattern = r'(https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3})(?:/music)?'
     m = re.match(pattern, url, re.I)
     if m:
@@ -230,52 +274,70 @@ def extract_base_url(url):
     return "https://music.yandex.ru"
 
 def is_valid_api_identifier(value, pattern):
-    """Проверяет, что идентификатор полностью соответствует безопасному шаблону."""
     return isinstance(value, str) and re.fullmatch(pattern, value) is not None
 
-
+# ---------- расширенный парсинг URL (из серверной версии) ----------
 def parse_yandex_url(url):
-    """Определяет тип ссылки (трек, альбом, плейлист) и возвращает его идентификатор."""
-    p = urlparse(url)
-    path = p.path
-    q = parse_qs(p.query)
+    parsed = urlparse(url)
+    path = parsed.path
+    query = parse_qs(parsed.query)
 
-    if m := re.search(r'/track/(\d+)', path):
+    # iframe-плейлист (новый)
+    m = re.search(r'/iframe/playlist/([^/]+)/(\d+)', path)
+    if m:
+        return ('iframe_playlist', m.group(2), m.group(1))
+
+    m = re.search(r'/track/(\d+)', path)
+    if m:
         return ('track', m.group(1), None)
-    if m := re.search(r'/album/(\d+)', path):
+
+    m = re.search(r'/album/(\d+)', path)
+    if m:
         return ('album', m.group(1), None)
-    if m := re.search(r'/users/([^/]+)/playlists/(\d+)', path):
+
+    m = re.search(r'/users/([^/]+)/playlists/(\d+)', path)
+    if m:
         return ('playlist', m.group(2), m.group(1))
-    if m := re.search(r'/playlist/(\d+)', path):
+
+    m = re.search(r'/playlist/(\d+)', path)
+    if m:
         return ('playlist', m.group(1), None)
-    if m := re.search(r'/playlists/([a-z0-9\-\.]+)', path):
-        return ('playlist', m.group(1), None)
+
+    # uuid-плейлист (например, /playlists/ps.12345)
+    m = re.search(r'/playlists/([a-z0-9\-\.]+)', path)
+    if m:
+        return ('uuid_playlist', m.group(1), None)
+
+    # старый формат handlers/playlist.jsx
     if 'handlers/playlist.jsx' in path:
-        owner = q.get('owner', [None])[0]
-        kinds = q.get('kinds', [None])[0]
+        owner = query.get('owner', [None])[0]
+        kinds = query.get('kinds', [None])[0]
         if owner and kinds:
             return ('playlist', kinds, owner)
+
     return (None, None, None)
 
-# ---------- обработка ссылок и составление списка треков ----------
+# ---------- сбор треков из ссылок (безопасный, с поддержкой всех типов) ----------
 async def collect_tracks_from_links(links):
-    """
-    Получает список треков из ссылок на треки, альбомы или плейлисты.
-    Возвращает список словарей с информацией о каждом треке.
-    """
     if not links:
         return []
 
     cprint(f"📎 Принято ссылок: {len(links)}. Анализирую...", 'info')
 
+    # Безопасный API-запрос (защита от SSRF)
+    ALLOWED_API_HOSTS = {
+        'api.music.yandex.net',
+        'api.music.yandex.ru',
+    }
+
     async def api_request(url):
         headers = {"Authorization": f"OAuth {user_token}"}
-        parsed_url = urlparse(url)
-        if parsed_url.scheme != "https" or parsed_url.netloc != "api.music.yandex.net":
+        parsed = urlparse(url)
+        if parsed.scheme != 'https' or parsed.hostname not in ALLOWED_API_HOSTS:
             cprint(f"❌ Заблокирован небезопасный URL API: {url}", 'err')
             return 0, None
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url, headers=headers) as r:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as r:
                 return r.status, await r.json() if r.status == 200 else None
 
     try:
@@ -288,23 +350,26 @@ async def collect_tracks_from_links(links):
     all_tracks = []
     for url in links:
         base = extract_base_url(url)
-        parsed = parse_yandex_url(url)
-        if not isinstance(parsed, (tuple, list)) or len(parsed) < 3 or parsed[0] is None:
+        typ, cid, username = parse_yandex_url(url)
+        if typ is None:
             cprint(f"❌ Не удалось распознать ссылку: {url}", 'err')
             continue
-        typ, cid, username = parsed
 
-        # Защита от partial SSRF: используем только строго валидные идентификаторы в URL API.
+        # Дополнительная валидация идентификаторов (defense in depth)
         if typ in ('track', 'album'):
-            if not is_valid_api_identifier(cid, r'\d+'):
-                cprint(f"❌ Некорректный идентификатор {typ}: {url}", 'err')
+            if not is_valid_api_identifier(str(cid), r'\d+'):
+                cprint(f"❌ Некорректный ID {typ}: {url}", 'err')
                 continue
-        elif typ == 'playlist':
-            if not is_valid_api_identifier(cid, r'[a-zA-Z0-9_.-]+'):
-                cprint(f"❌ Некорректный идентификатор плейлиста: {url}", 'err')
+        elif typ in ('playlist', 'iframe_playlist'):
+            if not is_valid_api_identifier(str(cid), r'\d+'):
+                cprint(f"❌ Некорректный ID плейлиста: {url}", 'err')
                 continue
-            if username is not None and not is_valid_api_identifier(username, r'[a-zA-Z0-9_.-]+'):
-                cprint(f"❌ Некорректный владелец плейлиста: {url}", 'err')
+            if username and not is_valid_api_identifier(username, r'[a-zA-Z0-9_.\-]+'):
+                cprint(f"❌ Некорректное имя владельца: {url}", 'err')
+                continue
+        elif typ == 'uuid_playlist':
+            if not is_valid_api_identifier(str(cid), r'[a-z0-9\-\.]+'):
+                cprint(f"❌ Некорректный UUID плейлиста: {url}", 'err')
                 continue
 
         try:
@@ -334,12 +399,11 @@ async def collect_tracks_from_links(links):
                     })
                 else:
                     cprint(f"❌ Трек не найден: {url}", 'err')
+
             elif typ == 'album':
-                # Defense in depth: enforce strict album id format at sink level.
-                if not re.fullmatch(r"\d+", str(cid)):
-                    cprint(f"❌ Некорректный идентификатор album: {url}", 'err')
-                    continue
-                status, data = await api_request("https://api.music.yandex.net/albums/" + str(cid) + "/with-tracks")
+                status, data = await api_request(
+                    f"https://api.music.yandex.net/albums/{cid}/with-tracks"
+                )
                 if status != 200 or not data:
                     cprint(f"❌ Альбом не найден: {url}", 'err')
                     continue
@@ -370,63 +434,73 @@ async def collect_tracks_from_links(links):
                             'year': alb_year,
                             'genre': alb_genre,
                         })
-            elif typ == 'playlist':
+
+            elif typ in ('playlist', 'uuid_playlist', 'iframe_playlist'):
                 cid_str = str(cid)
+                # Пропускаем персональные подборки
                 if cid_str.startswith(('ps.', 'lk.', 'pl.')):
                     cprint(f"⚠️ Плейлист «{cid_str}» — персональная подборка, пропущен.", 'warn')
                     continue
+
+                # Пробуем разные endpoints
                 endpoints = [f"https://api.music.yandex.net/playlists/{cid_str}"]
                 if username:
-                    endpoints.append(f"https://api.music.yandex.net/users/{username}/playlists/{cid}")
+                    endpoints.append(f"https://api.music.yandex.net/users/{username}/playlists/{cid_str}")
+
                 success = False
                 for ep in endpoints:
                     status, data = await api_request(ep)
-                    if status == 200 and data and 'result' in data:
-                        pl = data['result'].get('playlist', data['result'])
-                        if pl.get('owner', {}).get('login') in ('yamusic', 'yandex'):
-                            cprint("⚠️ Служебный плейлист пропущен.", 'warn')
-                            break
-                        for item in pl.get('tracks', []):
-                            tr = item.get('track')
-                            if not tr:
-                                continue
-                            tid = tr.get('id')
-                            artist = ', '.join(a.get('name', 'Неизвестен') for a in tr.get('artists', [])) or "Неизвестен"
-                            title = tr.get('title', 'Неизвестный трек')
-                            ver = tr.get('version') or tr.get('subtitle')
-                            if ver:
-                                title = f"{title} ({ver})"
-                            cover = await fetch_cover(tr.get('cover_uri'))
-                            alb = tr.get('albums', [{}])[0]
-                            all_tracks.append({
-                                'url': f"{base}/track/{tid}",
-                                'artist': artist,
-                                'title': title,
-                                'duration': tr.get('duration_ms', 0) // 1000,
-                                'track_name': f"{artist} — {title}",
-                                'cover_bytes': cover,
-                                'album': alb.get('title'),
-                                'year': alb.get('year'),
-                                'genre': alb.get('genre'),
-                            })
-                        success = True
-                        break
-                    elif status == 403:
+                    if status == 403:
                         cprint(f"🔒 Плейлист приватный: {url}", 'err')
                         break
+                    if status != 200 or not data or 'result' not in data:
+                        continue
+                    pl = data['result'].get('playlist', data['result'])
+                    # Пропускаем служебные подборки
+                    owner_login = pl.get('owner', {}).get('login', '')
+                    if owner_login in ('yamusic', 'yandex'):
+                        cprint("⚠️ Служебный плейлист пропущен.", 'warn')
+                        break
+                    playlist_title = pl.get('title', 'Неизвестный плейлист')
+                    for item in pl.get('tracks', []):
+                        tr = item.get('track')
+                        if not tr:
+                            continue
+                        tid = tr.get('id')
+                        artist = ', '.join(a.get('name', 'Неизвестен') for a in tr.get('artists', [])) or "Неизвестен"
+                        title = tr.get('title', 'Неизвестный трек')
+                        ver = tr.get('version') or tr.get('subtitle')
+                        if ver:
+                            title = f"{title} ({ver})"
+                        cover = await fetch_cover(tr.get('cover_uri'))
+                        alb = tr.get('albums', [{}])[0]
+                        all_tracks.append({
+                            'url': f"{base}/track/{tid}",
+                            'artist': artist,
+                            'title': title,
+                            'duration': tr.get('duration_ms', 0) // 1000,
+                            'track_name': f"{artist} — {title}",
+                            'cover_bytes': cover,
+                            'album': alb.get('title'),
+                            'year': alb.get('year'),
+                            'genre': alb.get('genre'),
+                        })
+                    success = True
+                    break
+
                 if not success and status != 403:
-                    cprint(f"❌ Плейлист не найден: {url}", 'err')
+                    cprint(f"❌ Плейлист не найден или недоступен: {url}", 'err')
+
         except Exception as e:
-            logger.error(f"Ошибка обработки ссылки {url}: {e}")
+            logger.error("Ошибка обработки ссылки %s: %s", url, e)
             cprint(f"❌ Ошибка: {e}", 'err')
 
     if not all_tracks:
         cprint("❌ Треки не найдены.", 'err')
     return all_tracks
 
-# ---------- загрузка одного трека ----------
+# ---------- загрузка одного трека (с безопасным сохранением) ----------
 async def download_track(task, cancel_event):
-    """Загружает один трек с помощью yandex-music-downloader."""
     tmp = Path(f"bocchi_tmp_{uuid.uuid4().hex}")
     q = user_quality
     used_q = None
@@ -485,7 +559,7 @@ async def download_track(task, cancel_event):
                 break
             else:
                 err = stderr.decode('utf-8', errors='replace')
-                logger.warning(f"Код возврата {code}: {err[:200]}")
+                logger.warning("Код возврата %d: %s", code, err[:200])
                 cprint(f"❌ Ошибка загрузчика (код {code}): {err[:200]}", 'err')
                 shutil.rmtree(tmp, ignore_errors=True)
                 tmp.mkdir(parents=True, exist_ok=True)
@@ -511,7 +585,7 @@ async def download_track(task, cancel_event):
         if used_q != q:
             cprint(f"🎵 Скачан в качестве {QUALITY_NAMES[used_q]}.", 'ok')
 
-        await asyncio.sleep(2)  # даём время дописаться файлам
+        await asyncio.sleep(2)
 
         files_found = False
         for f in tmp.rglob('*'):
@@ -529,24 +603,18 @@ async def download_track(task, cancel_event):
             if lrc:
                 lyrics = lrc.read_text(encoding='utf-8').strip()
 
-            # запись метаданных
+            # Запись метаданных (как раньше)
             try:
                 if f.suffix.lower() == '.m4a':
                     audio = MP4(f)
                     audio['\xa9ART'] = [artist]
                     audio['\xa9nam'] = [title]
-                    if album:
-                        audio['\xa9alb'] = [album]
-                    if year:
-                        audio['\xa9day'] = [str(year)]
-                    if genre:
-                        audio['\xa9gen'] = [genre]
-                    if '\xa9cmt' in audio:
-                        del audio['\xa9cmt']
-                    if lyrics:
-                        audio['\xa9lyr'] = [lyrics]
-                    if cover:
-                        audio['covr'] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_JPEG)]
+                    if album: audio['\xa9alb'] = [album]
+                    if year: audio['\xa9day'] = [str(year)]
+                    if genre: audio['\xa9gen'] = [genre]
+                    audio.pop('\xa9cmt', None)
+                    if lyrics: audio['\xa9lyr'] = [lyrics]
+                    if cover: audio['covr'] = [MP4Cover(cover, imageformat=MP4Cover.FORMAT_JPEG)]
                     audio.save()
                 else:
                     audio = MP3(f, ID3=ID3)
@@ -555,35 +623,38 @@ async def download_track(task, cancel_event):
                     easy = EasyID3(f)
                     easy['artist'] = [artist]
                     easy['title'] = [title]
-                    if album:
-                        easy['album'] = [album]
+                    if album: easy['album'] = [album]
                     easy.save()
                     audio.tags.add(TPE2(encoding=3, text=artist))
                     audio.tags.delall('COMM')
-                    if year:
-                        audio.tags.add(TDRC(encoding=3, text=str(year)))
-                    if genre:
-                        audio.tags.add(TCON(encoding=3, text=genre))
-                    if lyrics:
-                        audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
-                    if cover:
-                        audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, data=cover))
+                    if year: audio.tags.add(TDRC(encoding=3, text=str(year)))
+                    if genre: audio.tags.add(TCON(encoding=3, text=genre))
+                    if lyrics: audio.tags.add(USLT(encoding=3, lang='rus', desc='Lyrics', text=lyrics))
+                    if cover: audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, data=cover))
                     audio.save()
             except Exception as e:
-                logger.error(f"Ошибка записи тегов: {e}")
+                logger.error("Ошибка записи тегов: %s", e)
 
-            safe_name = re.sub(r'[\\/*?:"<>|]', "", f"{artist.replace(';', ',')} - {title}{f.suffix}")
-            dest = DOWNLOAD_DIR / safe_name
+            # Безопасное имя файла: удаляем запрещённые символы и проверяем выход за пределы папки
+            raw_name = f"{artist.replace(';', ',')} - {title}{f.suffix}"
+            safe_name = re.sub(r'[\\/*?:"<>|]', "", raw_name)
+            # Дополнительно убираем возможные переходы по директориям
+            safe_name = safe_name.replace('..', '_').replace('/', '_').replace('\\', '_')
+            dest = (DOWNLOAD_DIR / safe_name).resolve()
+            # Проверяем, что итоговый путь остаётся внутри DOWNLOAD_DIR
+            if not str(dest).startswith(str(DOWNLOAD_DIR.resolve())):
+                cprint(f"⚠️ Некорректный путь сохранения: {dest}", 'err')
+                continue
             try:
                 shutil.move(str(f), dest)
                 cprint(f"✅ Сохранён: {safe_name} ({dest.stat().st_size / 1024 / 1024:.2f} МБ)", 'ok')
             except Exception as e:
-                logger.error(f"Ошибка перемещения: {e}")
+                logger.error("Ошибка перемещения: %s", e)
                 cprint(f"❌ Не удалось сохранить файл: {e}", 'err')
 
         if not files_found:
             cprint("⚠️ Загрузчик не создал ни одного аудиофайла. Проверьте ссылку.", 'warn')
-            logger.error(f"Файлы не найдены. Содержимое tmp: {list(tmp.rglob('*'))}")
+            logger.error("Файлы не найдены. Содержимое tmp: %s", list(tmp.rglob('*')))
 
         return True
 
@@ -591,7 +662,7 @@ async def download_track(task, cancel_event):
         cprint("⏹ Загрузка прервана.", 'warn')
         return False
     except Exception as e:
-        logger.error(f"Ошибка при загрузке трека: {e}", exc_info=True)
+        logger.error("Ошибка при загрузке трека: %s", e, exc_info=True)
         cprint(f"❌ Ошибка: {e}", 'err')
         return False
     finally:
@@ -599,7 +670,6 @@ async def download_track(task, cancel_event):
 
 # ---------- команды меню ----------
 async def cmd_auth():
-    """Установка или обновление токена."""
     clear_screen()
     cprint("\n:: АВТОРИЗАЦИЯ", 'menu')
     print("1. Перейдите по ссылке:")
@@ -622,12 +692,11 @@ async def cmd_auth():
         save_token(token)
         cprint(f"✅ Успешный вход как {login}!", 'ok')
     except Exception as e:
-        logger.error(f"Ошибка токена: {e}")
+        logger.error("Ошибка токена: %s", e)
         cprint("❌ Токен недействителен.", 'err')
     wait_for_enter()
 
 def cmd_logout():
-    """Удаление сохранённого токена."""
     clear_screen()
     if not is_token_valid():
         cprint("ℹ️ Токен не установлен.", 'info')
@@ -637,7 +706,6 @@ def cmd_logout():
     wait_for_enter()
 
 async def cmd_set_quality():
-    """Изменение качества загрузки."""
     clear_screen()
     global user_quality
     cprint(":: КАЧЕСТВО", 'menu')
@@ -652,7 +720,6 @@ async def cmd_set_quality():
     wait_for_enter()
 
 async def cmd_start_download():
-    """Запуск процесса загрузки: ввод ссылок, анализ, последовательная загрузка."""
     clear_screen()
     if not is_token_valid():
         cprint("❌ Сначала авторизуйтесь (пункт 1).", 'err')
@@ -671,7 +738,8 @@ async def cmd_start_download():
             return
         if not line:
             break
-        if re.search(r'yandex\.[a-z]{2,3}/', line, re.I):
+        # Простейшая проверка, что это ссылка Яндекса
+        if re.search(r'yandex\.[a-z]{2,3}/', line, re.I) or 'iframe' in line:
             links.append(line)
         else:
             cprint("Пропущено (не ссылка Яндекс.Музыки).", 'warn')
@@ -689,7 +757,6 @@ async def cmd_start_download():
     total = len(tracks)
     cprint(f"📥 Найдено {get_plural_tracks(total)}. Начинаю загрузку...", 'ok')
 
-    # переход на экран загрузки
     clear_screen()
     cprint(":: РЕЖИМ ЗАГРУЗКИ", 'menu')
     print("   Для отмены нажмите 0 (без Enter)\n")
@@ -735,13 +802,11 @@ async def cmd_start_download():
     wait_for_enter()
 
 def cmd_exit():
-    """Выход из программы."""
     clear_screen()
     cprint("👋 Завершение работы...", 'info')
     sys.exit(0)
 
 def print_menu():
-    """Выводит главное меню."""
     clear_screen()
     border = "  ----------------------------------------"
     header = "  BOCCHI DOWNLOADER (CLI Edition)"
@@ -767,7 +832,6 @@ def print_menu():
     print()
 
 async def main_async():
-    """Главная асинхронная функция."""
     load_token()
     while True:
         print_menu()
@@ -790,7 +854,6 @@ async def main_async():
             wait_for_enter()
 
 def main():
-    """Точка входа."""
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:
