@@ -2,10 +2,7 @@ version: "3.8"
 
 services:
   bocchi:
-    # Готовый образ из Docker Hub
     image: yaroslavgrud/bocchi-downloader-server-edition:latest
-    # Для локальной разработки: закомментируй строку выше и раскомментируй ниже
-    # build: .
     container_name: bocchi-bot
     restart: unless-stopped
     env_file:
@@ -13,8 +10,17 @@ services:
     environment:
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - BOT_MODE=${BOT_MODE:-stable}
+
     volumes:
-      - bocchi_data:/app/data   # постоянное хранилище (статистика и т.п.)
+      - bocchi_data:/app/data
+      - type: tmpfs
+        target: /tmp
+      - type: tmpfs
+        target: /var/tmp
+
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   bocchi_data:
