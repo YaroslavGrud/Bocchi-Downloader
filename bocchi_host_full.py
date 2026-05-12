@@ -274,7 +274,7 @@ async def cleanup_orphan_messages(app):
     for task_id, info in list(active_status_msgs.items()):
         try:
             await app.bot.delete_message(chat_id=info['chat_id'], message_id=info['message_id'])
-        except:
+        except Exception:
             pass
         active_status_msgs.pop(task_id, None)
     save_active_msgs()
@@ -337,7 +337,7 @@ async def fetch_cover_from_yandex(cover_uri: str) -> bytes | None:
             async with session.get(cover_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status == 200:
                     return await resp.read()
-    except:
+    except Exception:
         pass
     return None
 
@@ -383,7 +383,7 @@ def extract_cover_from_audio(file_path: Path) -> bytes | None:
             if 'covr' in audio.tags and audio.tags['covr']:
                 if isinstance(audio.tags['covr'][0], MP4Cover):
                     return bytes(audio.tags['covr'][0])
-    except:
+    except Exception:
         pass
     return None
 
@@ -392,7 +392,7 @@ def get_audio_duration(file_path: Path) -> int:
         if file_path.suffix.lower() == '.m4a':
             return int(MP4(file_path).info.length)
         return int(MP3(file_path).info.length)
-    except:
+    except Exception:
         return 0
 
 def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
@@ -400,7 +400,7 @@ def check_disk_space(min_free_mb: int = MIN_FREE_DISK_MB) -> tuple[bool, float]:
         stat = shutil.disk_usage(Path.cwd())
         free_mb = stat.free / (1024 * 1024)
         return free_mb >= min_free_mb, free_mb
-    except:
+    except Exception:
         return True, 9999.0
 
 def cleanup_old_tmp_dirs():
@@ -420,7 +420,7 @@ def add_stats(bytes_added: int):
                 current = float(f.read())
         with open(STATS_FILE_PATH, "w") as f:
             f.write(str(current + bytes_added))
-    except:
+    except Exception:
         pass
 
 def get_formatted_stats() -> str:
@@ -434,7 +434,7 @@ def get_formatted_stats() -> str:
                 return f"{val:.2f} {unit}"
             val /= 1024.0
         return f"{val:.2f} ТБ"
-    except:
+    except Exception:
         return "0 Б"
 
 def get_ping() -> float:
@@ -444,7 +444,7 @@ def get_ping() -> float:
         match = re.search(r'time=([\d\.]+)', out)
         if match:
             return float(match.group(1))
-    except:
+    except Exception:
         pass
     return 0.0
 
@@ -600,7 +600,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка во время выполнения статуса: {e}")
         try:
             await context.bot.send_message(chat_id, "❌ Произошла ошибка при формировании статуса.")
-        except:
+        except Exception:
             pass
     finally:
         # Очищаем данные о черновике в любом случае
@@ -670,7 +670,7 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Не удалось найти токен.")
         return WAITING_FOR_TOKEN
     try: await update.message.delete()
-    except: pass
+    except Exception: pass
     status_msg = await update.message.reply_text("🔍 Проверяю токен…")
     try:
         client = ClientAsync(token)
@@ -700,7 +700,7 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await status_msg.edit_text(f"✅ Ура! Я узнала тебя, {login}!")
                         await show_main_menu(update, context)
                         return WAITING_FOR_LINK
-    except: pass
+    except Exception: pass
     await status_msg.edit_text("❌ Токен не подходит… Попробуй ещё раз.")
     return WAITING_FOR_TOKEN
 
@@ -959,13 +959,13 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
                 try:
                     proc.kill()
                     await proc.wait()
-                except:
+                except Exception:
                     pass
             msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
             if msg_id:
                 try:
                     await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-                except:
+                except Exception:
                     pass
             task = info['task']
             current_task_info.pop(task_id)
@@ -1002,7 +1002,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if now - last_time < COMMAND_COOLDOWN:
             try:
                 await update.message.delete()
-            except:
+            except Exception:
                 pass
             return WAITING_FOR_LINK
         last_command_time[user_id] = now
@@ -1062,7 +1062,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
-        except:
+        except Exception:
             pass
         now = time.time()
         last_warn = last_auth_warning.get(user_id, 0)
@@ -1092,7 +1092,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, "🔄 Я пока занята предыдущей загрузкой… Подожди немножко.")
         try:
             await message.delete()
-        except:
+        except Exception:
             pass
         return WAITING_FOR_LINK
 
@@ -1117,14 +1117,14 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                  reply_to_message_id=message.message_id)
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
 
     async def delete_confirm():
         await asyncio.sleep(5)
         try:
             await confirm_msg.delete()
-        except:
+        except Exception:
             pass
     asyncio.create_task(delete_confirm())
 
@@ -1380,13 +1380,13 @@ async def worker_loop(app):
                     if old:
                         try:
                             await app.bot.delete_message(chat_id=old['chat_id'], message_id=old['message_id'])
-                        except:
+                        except Exception:
                             pass
                     prev = chat_temp_msg.pop(chat_id, None)
                     if prev:
                         try:
                             await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                        except:
+                        except Exception:
                             pass
 
                     tmp_dir.mkdir(exist_ok=True)
@@ -1474,7 +1474,7 @@ async def worker_loop(app):
                             ])
                             try:
                                 await app.bot.edit_message_reply_markup(chat_id, status_msg.message_id, reply_markup=new_keyboard)
-                            except:
+                            except Exception:
                                 pass
 
                         enough, free_mb = check_disk_space()
@@ -1547,7 +1547,7 @@ async def worker_loop(app):
                         if lrc_file.exists():
                             try:
                                 lyrics = lrc_file.read_text(encoding='utf-8').strip()
-                            except:
+                            except Exception:
                                 pass
 
                         try:
@@ -1674,7 +1674,7 @@ async def worker_loop(app):
                     if status_msg:
                         try:
                             await status_msg.delete()
-                        except:
+                        except Exception:
                             pass
                     save_active_msgs()
                     save_queue_state()
