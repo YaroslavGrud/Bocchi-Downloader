@@ -16,7 +16,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 import aiohttp
 from mutagen.easyid3 import EasyID3
@@ -331,7 +331,8 @@ async def collect_tracks_from_links(links):
                 else:
                     cprint(f"❌ Трек не найден: {url}", 'err')
             elif typ == 'album':
-                status, data = await api_request(f"https://api.music.yandex.net/albums/{cid}/with-tracks")
+                safe_cid = quote(cid, safe='')
+                status, data = await api_request("https://api.music.yandex.net/albums/" + safe_cid + "/with-tracks")
                 if status != 200 or not data:
                     cprint(f"❌ Альбом не найден: {url}", 'err')
                     continue
