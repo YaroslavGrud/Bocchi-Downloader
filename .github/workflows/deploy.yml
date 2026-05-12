@@ -13,7 +13,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5   # было v4
+        uses: actions/checkout@v6   # было v4
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v4 # было v3
