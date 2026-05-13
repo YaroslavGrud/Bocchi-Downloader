@@ -137,7 +137,7 @@ def get_v2raya_status():
     try:
         status = subprocess.check_output(["systemctl", "is-active", "v2raya"]).decode().strip()
         return "🟢 Включена" if status == "active" else "🔴 Выключена"
-    except:
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return "⚪ Статус неизвестен"
 
 def get_network_signal():
@@ -156,7 +156,7 @@ def get_ping():
         output = subprocess.check_output(["ping", "-c", "1", "-W", "1", "ya.ru"], stderr=subprocess.STDOUT, text=True)
         match = re.search(r'time=([\d\.]+)', output)
         return float(match.group(1)) if match else 0.0
-    except:
+    except Exception:
         return 0.0
 
 def get_temp():
