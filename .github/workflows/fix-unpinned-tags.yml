@@ -80,4 +80,3 @@ jobs:
           branch: fix/unpin-action-tags
           delete-branch: true
           token: ${{ secrets.PAT_TOKEN }}   # ← замена GITHUB_TOKEN на PAT
-
