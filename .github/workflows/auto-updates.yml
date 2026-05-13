@@ -147,7 +147,6 @@ jobs:
             - 🔒 Закреплены SHA для GitHub Actions
             - 🐍 Обновлены версии Python-пакетов
             - 🐳 Обновлён базовый образ Docker
-            
             Проверьте изменения перед слиянием.
           branch: auto-updates
           delete-branch: true
