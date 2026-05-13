@@ -6,42 +6,44 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  security-events: write   # нужно для создания коммита autofix
+  security-events: write
 
 jobs:
   collect-commits-and-pr:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     env:
-      BASE_BRANCH: main   # укажите вашу основную ветку, если не main
+      BASE_BRANCH: main
 
     steps:
-      - name: 1. Получить список алертов с готовым Autofix
+      - name: 1. Получить все открытые CodeQL алерты
         id: list_alerts
         uses: actions/github-script@v7
         with:
           script: |
             const alerts = await github.paginate(
               'GET /repos/{owner}/{repo}/code-scanning/alerts',
-              { owner: context.repo.owner, repo: context.repo.repo,
-                state: 'open', tool_name: 'CodeQL', per_page: 100 }
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                tool_name: 'CodeQL',
+                per_page: 100,
+              }
             );
 
-            // Фильтруем только те, где autofix.status === 'generated'
-            const ready = alerts.filter(a => a.autofix?.status === 'generated');
+            const allNumbers = alerts.map(a => a.number);
+            console.log(`Найдено ${allNumbers.length} открытых алертов`);
+            core.exportVariable('ALL_ALERTS', allNumbers.join(','));
 
-            console.log(`Найдено ${ready.length} алертов с готовым Autofix`);
-            core.exportVariable('READY_ALERTS', ready.map(a => a.number).join(','));
-
-      - name: 2. Нажать «Commit to new branch» для каждого
+      - name: 2. Попытаться создать autofix-коммит для каждого
         id: create_commits
-        if: env.READY_ALERTS
+        if: env.ALL_ALERTS
         uses: actions/github-script@v7
-        timeout-minutes: 15
+        timeout-minutes: 25
         with:
           script: |
-            const numbers = process.env.READY_ALERTS.split(',');
+            const numbers = process.env.ALL_ALERTS.split(',');
             const branches = [];
 
             for (const num of numbers) {
@@ -54,24 +56,26 @@ jobs:
                     alert_number: parseInt(num),
                   }
                 );
-                const branch = response.data.ref;   // например, "refs/heads/autofix/alert-123-..."
-                const shortBranch = branch.replace('refs/heads/', '');
+                const branchRef = response.data.ref;   // например, refs/heads/autofix/...
+                const shortBranch = branchRef.replace('refs/heads/', '');
                 branches.push(shortBranch);
-                console.log(`#${num}: коммит создан в ветке ${shortBranch}`);
+                console.log(`#${num}: ✅ коммит → ${shortBranch}`);
               } catch (error) {
-                console.error(`#${num}: ошибка – ${error.message}`);
+                if (error.status === 404 || error.status === 422) {
+                  console.log(`#${num}: autofix недоступен (${error.status})`);
+                } else {
+                  console.error(`#${num}: ошибка – ${error.message}`);
+                }
               }
-              // задержка, чтобы не упереться в лимит (5 запросов в минуту)
+              // Задержка 12 секунд, чтобы не превысить лимит (~5 запросов/мин)
               await new Promise(resolve => setTimeout(resolve, 12000));
             }
 
-            if (branches.length === 0) {
-              console.log('Не создано ни одной ветки — выходим');
-            }
+            console.log(`Успешно создано веток: ${branches.length}`);
             core.exportVariable('FIX_BRANCHES', branches.join(','));
             core.exportVariable('FIX_COUNT', branches.length.toString());
 
-      - name: 3. Объединить все ветки в одну общую
+      - name: 3. Собрать все ветки в одну общую
         if: env.FIX_COUNT > 0
         uses: actions/github-script@v7
         with:
@@ -94,6 +98,7 @@ jobs:
             for (const branch of fixBranches) {
               console.log(`Мержим ${branch}...`);
               try {
+                execSync(`git fetch origin ${branch}`);
                 execSync(`git merge origin/${branch} --no-ff -m "Merge autofix ${branch}"`);
               } catch (err) {
                 console.error(`Конфликт при мерже ${branch}: ${err.message}`);
@@ -101,11 +106,10 @@ jobs:
               }
             }
 
-            // Пушим общую ветку
             execSync(`git push origin ${mergeBranch}`);
             core.exportVariable('MERGE_BRANCH', mergeBranch);
 
-      - name: 4. Создать Pull Request
+      - name: 4. Создать общий Pull Request
         if: env.MERGE_BRANCH
         uses: actions/github-script@v7
         with:
@@ -117,11 +121,11 @@ jobs:
               title: `🤖 Copilot Autofix: ${count} исправлений одним PR`,
               head: process.env.MERGE_BRANCH,
               base: process.env.BASE_BRANCH,
-              body: `Объединены автоподстановки для ${count} алертов.\n\nВетки исправлений: ${process.env.FIX_BRANCHES}`,
+              body: `Объединены автоматические исправления для ${count} алертов.\n\nВетки: ${process.env.FIX_BRANCHES}`,
             });
             console.log(`✅ PR создан: ${pr.data.html_url}`);
 
-      - name: 5. (Опционально) Удалить временные ветки
+      - name: 5. Удалить временные autofix-ветки (опционально)
         if: always() && env.FIX_BRANCHES
         uses: actions/github-script@v7
         with:
