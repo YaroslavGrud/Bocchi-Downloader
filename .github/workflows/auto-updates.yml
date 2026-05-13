@@ -1,0 +1,154 @@
+name: "Проверить обновления зависимостей"
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'   # каждый понедельник в 3:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  full-update-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}   # PAT с доступом к workflow
+
+      # ---------- 1. Обновление SHA для GitHub Actions (ваш скрипт) ----------
+      - name: Pin GitHub Actions
+        id: pin
+        run: |
+          python3 << 'PYEOF'
+          import os, re, subprocess
+
+          workflows_dir = ".github/workflows"
+          changed = False
+          files = []
+          for root, dirs, filenames in os.walk(workflows_dir):
+              for f in filenames:
+                  if f.endswith(('.yml', '.yaml')):
+                      files.append(os.path.join(root, f))
+          
+          for filepath in files:
+              with open(filepath, "r") as f:
+                  content = f.read()
+              lines = content.splitlines()
+              new_lines = []
+              for line in lines:
+                  m = re.match(r"^(.*uses:\s+)([^@\s]+)@(v\d[\d.]*)(\s*.*)$", line)
+                  if m:
+                      prefix, action, tag, suffix = m.groups()
+                      if re.fullmatch(r"[a-f0-9]{40}", tag):
+                          new_lines.append(line)
+                          continue
+                      repo_url = f"https://github.com/{action}.git"
+                      try:
+                          result = subprocess.run(["git", "ls-remote", repo_url, tag],
+                                                  capture_output=True, text=True, check=True)
+                          sha = result.stdout.split()[0] if result.stdout.strip() else None
+                      except Exception:
+                          sha = None
+                      if sha:
+                          new_line = f"{prefix}{action}@{sha}{suffix}"
+                          new_lines.append(new_line)
+                          print(f"Заменён {action}@{tag} -> {sha} в {filepath}")
+                          changed = True
+                      else:
+                          new_lines.append(line)
+                          print(f"Не удалось получить SHA для {action}@{tag} в {filepath}")
+                  else:
+                      new_lines.append(line)
+              new_content = "\n".join(new_lines)
+              if new_content != content:
+                  with open(filepath, "w") as f:
+                      f.write(new_content)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fout:
+              fout.write(f"changed={'true' if changed else 'false'}\n")
+          PYEOF
+
+      # ---------- 2. Проверка обновлений Python-пакетов ----------
+      - name: Check outdated Python packages
+        id: pip
+        run: |
+          # Устанавливаем зависимости текущего проекта (без yandex-music, как в Dockerfile)
+          grep -v "yandex-music" requirements.txt > req_clean.txt || true
+          pip install -r req_clean.txt
+          # Смотрим устаревшие пакеты в формате JSON
+          pip list --outdated --format=json > outdated.json
+          # Если есть устаревшие, создаём обновлённый requirements.txt
+          python3 << 'PYEOF'
+          import json, subprocess, os
+
+          with open("outdated.json") as f:
+              data = json.load(f)
+          if not data:
+              print("Python-пакеты актуальны.")
+              exit(0)
+
+          # Для простоты сгенерируем обновлённый файл с жёсткими версиями
+          updated_lines = []
+          with open("req_clean.txt") as f:
+              for line in f:
+                  line = line.strip()
+                  if not line or line.startswith("#"):
+                      continue
+                  pkg = line.split("==")[0].split(">=")[0].split("<")[0].strip()
+                  # получаем последнюю версию через pip index
+                  try:
+                      result = subprocess.run(["pip", "index", "versions", pkg],
+                                              capture_output=True, text=True, check=True)
+                      versions = result.stdout.split(":")[-1].strip().split(",")[0].strip()
+                      updated_lines.append(f"{pkg}=={versions}")
+                  except Exception:
+                      updated_lines.append(line)  # оставляем как есть
+          with open("requirements_updated.txt", "w") as f:
+              f.write("\n".join(updated_lines))
+          import shutil
+          shutil.move("requirements_updated.txt", "requirements.txt")
+          subprocess.run(["git", "add", "requirements.txt"])
+          print("Обновлён requirements.txt")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fout:
+              fout.write("updated=true\n")
+          PYEOF
+
+      # ---------- 3. Проверка базового образа Docker ----------
+      - name: Check base Docker image update
+        id: docker
+        run: |
+          # Берём текущий образ из Dockerfile (FROM python:3.14.0-slim)
+          CURRENT_IMAGE=$(grep -oP 'FROM \K\S+' Dockerfile)
+          if [ -z "$CURRENT_IMAGE" ]; then
+            echo "Не удалось определить базовый образ"
+            exit 0
+          fi
+          # Получаем последний тег python:3.14-slim из Docker Hub
+          LATEST_TAG=$(curl -s "https://registry.hub.docker.com/v2/repositories/library/python/tags/?page_size=1&page=1&name=3.14-slim" | jq -r '.results[0].name')
+          if [ "$CURRENT_IMAGE" != "python:${LATEST_TAG}" ]; then
+            echo "Доступна новая версия образа: python:${LATEST_TAG}"
+            sed -i "s|${CURRENT_IMAGE}|python:${LATEST_TAG}|g" Dockerfile
+            git add Dockerfile
+            echo "updated=true" >> $GITHUB_OUTPUT
+          else
+            echo "Базовый образ актуален."
+          fi
+
+      # ---------- 4. Создание Pull Request (если были любые изменения) ----------
+      - name: Create Pull Request with updates
+        if: steps.pin.outputs.changed == 'true' || steps.pip.outputs.updated == 'true' || steps.docker.outputs.updated == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          commit-message: "🔄 Автоматическое обновление зависимостей"
+          title: "🔄 Еженедельное обновление зависимостей"
+          body: |
+            Автоматически обнаружены и внесены обновления:
+            - 🔒 Закреплены SHA для GitHub Actions
+            - 🐍 Обновлены версии Python-пакетов
+            - 🐳 Обновлён базовый образ Docker
+            
+            Проверьте изменения перед слиянием.
+          branch: auto-updates
+          delete-branch: true
