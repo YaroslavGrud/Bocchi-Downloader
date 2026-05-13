@@ -163,7 +163,7 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             except Exception:
                 try:
                     await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=" ")
-                except:
+                except Exception:
                     pass
             return msg
         except Exception as e:
