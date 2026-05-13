@@ -789,7 +789,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await status_msg.edit_text(full_text)
-        except:
+        except Exception:
             pass
         await asyncio.sleep(1)
 
