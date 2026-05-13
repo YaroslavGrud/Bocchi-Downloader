@@ -163,8 +163,8 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             except Exception:
                 try:
                     await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=" ")
-                except Exception:
-                    pass
+                except Exception as draft_err:
+                    logger.debug(f"Не удалось очистить draft {draft_id} в чате {chat_id}: {draft_err}")
             return msg
         except Exception as e:
             logger.warning(f"Попытка {attempt+1}/{max_retries} анимации не удалась: {e}")
