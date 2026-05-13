@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  security-events: write   # необходимо для создания autofix-коммита
+  security-events: write
 
 jobs:
   collect-autofix-to-pr:
@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 30
 
     env:
-      BASE_BRANCH: Yaroslav_grud   # замените на имя вашей основной ветки, если не main
+      BASE_BRANCH: Yaroslav_grud   # ваша основная ветка (откуда алерты)
 
     steps:
       - name: 1. Получить список алертов с готовым Autofix
@@ -22,15 +22,36 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            // Получаем алерты с фильтром по ветке, если указана
+            const params = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              tool_name: 'CodeQL',
+              per_page: 100,
+            };
+            if (process.env.BASE_BRANCH) {
+              params.ref = `refs/heads/${process.env.BASE_BRANCH}`;
+            }
+
             const alerts = await github.paginate(
               'GET /repos/{owner}/{repo}/code-scanning/alerts',
-              { owner: context.repo.owner, repo: context.repo.repo,
-                state: 'open', tool_name: 'CodeQL', per_page: 100 }
+              params
             );
 
-            const ready = alerts.filter(a => a.autofix?.status === 'generated');
+            // Выводим все статусы autofix для диагностики
+            alerts.forEach(a => {
+              console.log(`Алерт #${a.number}: autofix.status = ${a.autofix?.status || 'нет autofix'}, fixed_at = ${a.fixed_at}`);
+            });
 
-            console.log(`Найдено ${ready.length} алертов с готовым Autofix`);
+            // Берём алерты, у которых autofix готов: статус generated, success или есть fix.diff
+            const ready = alerts.filter(a => {
+              const status = a.autofix?.status;
+              const hasDiff = a.autofix?.fix?.diff && a.autofix.fix.diff.trim().length > 0;
+              return !a.fixed_at && (status === 'generated' || status === 'success' || hasDiff);
+            });
+
+            console.log(`\nНайдено ${ready.length} алертов для обработки.`);
             core.exportVariable('READY_ALERTS', ready.map(a => a.number).join(','));
 
       - name: 2. Создать ветки с исправлениями (API + ручной fallback)
@@ -119,7 +140,6 @@ jobs:
                 branches.push(branchName);
               }
               
-              // Задержка, чтобы не превысить лимит API
               await new Promise(resolve => setTimeout(resolve, 12000));
             }
 
