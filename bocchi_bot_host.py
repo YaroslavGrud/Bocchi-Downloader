@@ -29,7 +29,7 @@ from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 )
 from telegram.constants import ChatAction
-from telegram.error import BadRequest, Forbidden          # <-- добавлено
+from telegram.error import BadRequest, Forbidden
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, ConversationHandler, filters
@@ -174,7 +174,7 @@ async def cleanup_orphan_messages(app):
             await app.bot.delete_message(chat_id=info['chat_id'], message_id=info['message_id'])
             logger.info(f"Удалено висящее сообщение {info['message_id']} для задачи {task_id}")
         except (BadRequest, Forbidden):
-            pass  # сообщение уже удалено или нет доступа – норма
+            logger.debug("Ожидаемая ошибка: сообщение уже удалено или нет доступа при очистке")
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение {info['message_id']}: {e}")
         active_status_msgs.pop(task_id, None)
@@ -412,7 +412,7 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             try:
                 await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
             except (BadRequest, Forbidden):
-                pass  # draft может быть уже удалён – не страшно
+                logger.debug("Черновик сообщения уже удалён или недоступен")
             return msg
         except Exception as e:
             logger.warning(f"Анимация {attempt+1}: {e}")
@@ -545,7 +545,7 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.delete()
     except (BadRequest, Forbidden):
-        pass  # сообщение могло быть уже удалено – не критично
+        logger.debug("Сообщение с токеном уже удалено или нет доступа")
     except Exception as e:
         logger.warning(f"Не удалось удалить сообщение с токеном: {e}")
 
@@ -648,7 +648,7 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                 proc.kill()
                 await proc.wait()
             except ProcessLookupError:
-                pass  # процесс уже завершён
+                logger.debug("Процесс уже завершён при отмене")
             except Exception as e:
                 logger.warning(f"Ошибка при завершении процесса: {e}")
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
@@ -656,7 +656,7 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
             except (BadRequest, Forbidden):
-                pass
+                logger.debug("Статусное сообщение уже удалено при отмене")
             except Exception as e:
                 logger.warning(f"Ошибка удаления статусного сообщения: {e}")
         current_task_info.pop(task_id, None)
@@ -698,7 +698,7 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 proc.kill()
                 await proc.wait()
             except ProcessLookupError:
-                pass
+                logger.debug("Процесс уже завершён при экстренной остановке")
             except Exception as e:
                 logger.warning(f"Ошибка при убийстве процесса: {e}")
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
@@ -706,7 +706,7 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.delete_message(chat_id=info['chat_id'], message_id=msg_id)
             except (BadRequest, Forbidden):
-                pass
+                logger.debug("Не удалось удалить сообщение при экстренной остановке (ожидаемо)")
             except Exception as e:
                 logger.warning(f"Не удалось удалить сообщение: {e}")
     current_task_info.clear()
@@ -744,7 +744,7 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
             await proc.wait()
             logger.info(f"Убит зависший процесс для задачи {stuck_task_id}")
         except ProcessLookupError:
-            pass
+            logger.debug("Процесс уже завершён при перезапуске")
         except Exception as e:
             logger.error(f"Ошибка при убийстве процесса: {e}")
     msg_id = active_status_msgs.pop(stuck_task_id, {}).get('message_id')
@@ -752,7 +752,7 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except (BadRequest, Forbidden):
-            pass
+            logger.debug("Сообщение уже удалено при перезапуске")
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение: {e}")
     current_task_info.pop(stuck_task_id, None)
@@ -844,7 +844,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await message.delete()
         except (BadRequest, Forbidden):
-            pass
+            logger.debug("Сообщение со ссылкой уже удалено или нет доступа")
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение со ссылкой: {e}")
         now = time.time()
@@ -897,7 +897,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await message.delete()
         except (BadRequest, Forbidden):
-            pass
+            logger.debug("Сообщение уже удалено при ожидании")
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение: {e}")
         return WAITING_FOR_LINK
@@ -932,7 +932,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await message.delete()
     except (BadRequest, Forbidden):
-        pass
+        logger.debug("Сообщение удалено при накоплении ссылок")
     except Exception as e:
         logger.warning(f"Не удалось удалить сообщение: {e}")
 
@@ -1279,7 +1279,7 @@ async def worker_loop(app):
                             try:
                                 await app.bot.delete_message(chat_id=old_info['chat_id'], message_id=old_info['message_id'])
                             except (BadRequest, Forbidden):
-                                pass
+                                logger.debug("Старое статусное сообщение уже удалено")
                             except Exception as e:
                                 logger.warning(f"Не удалось удалить старое сообщение: {e}")
                         prev = chat_temp_msg.pop(chat_id, None)
@@ -1287,7 +1287,7 @@ async def worker_loop(app):
                             try:
                                 await app.bot.delete_message(chat_id=chat_id, message_id=prev)
                             except (BadRequest, Forbidden):
-                                pass
+                                logger.debug("Временное сообщение уже удалено или недоступно для удаления")
                             except Exception as e:
                                 logger.warning(f"Не удалось удалить временное сообщение: {e}")
 
@@ -1385,7 +1385,7 @@ async def worker_loop(app):
                                     )
                                     logger.warning(f"Задача {task_id} зависла, добавлена кнопка перезапуска")
                                 except (BadRequest, Forbidden):
-                                    pass
+                                    logger.debug("Не удалось обновить клавиатуру (ожидаемая ошибка)")
                                 except Exception as e:
                                     logger.error(f"Не удалось обновить клавиатуру: {e}")
 
@@ -1399,7 +1399,7 @@ async def worker_loop(app):
                                         try:
                                             await app.bot.delete_message(chat_id=chat_id, message_id=prev)
                                         except (BadRequest, Forbidden):
-                                            pass
+                                            logger.debug("Временное сообщение уже удалено при недостатке места")
                                         except Exception as e:
                                             logger.warning(f"Не удалось удалить сообщение: {e}")
                                     msg = await app.bot.send_message(
@@ -1445,7 +1445,7 @@ async def worker_loop(app):
                                         try:
                                             await app.bot.delete_message(chat_id=chat_id, message_id=prev)
                                         except (BadRequest, Forbidden):
-                                            pass
+                                            logger.debug("Временное сообщение уже удалено при нехватке памяти")
                                         except Exception as e:
                                             logger.warning(f"Не удалось удалить сообщение: {e}")
                                     msg = await app.bot.send_message(
@@ -1498,7 +1498,7 @@ async def worker_loop(app):
                                 try:
                                     await app.bot.delete_message(chat_id=chat_id, message_id=prev)
                                 except (BadRequest, Forbidden):
-                                    pass
+                                    logger.debug("Временное сообщение уже удалено при смене качества")
                                 except Exception as e:
                                     logger.warning(f"Не удалось удалить сообщение: {e}")
                             msg = await app.bot.send_message(
@@ -1640,7 +1640,7 @@ async def worker_loop(app):
                                     try:
                                         await status_msg.edit_text(f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на облако...")
                                     except (BadRequest, Forbidden):
-                                        pass
+                                        logger.debug("Не удалось изменить статусное сообщение (ожидаемо)")
                                     except Exception as e:
                                         logger.warning(f"Не удалось изменить статусное сообщение: {e}")
                                 try:
@@ -1728,7 +1728,7 @@ async def worker_loop(app):
                                         reply_markup=main_markup
                                     )
                                 except (BadRequest, Forbidden):
-                                    pass
+                                    logger.debug("Не удалось отправить финальное сообщение (ожидаемо)")
                                 except Exception as e:
                                     logger.error(f"Ошибка финального сообщения: {e}")
 
@@ -1745,7 +1745,7 @@ async def worker_loop(app):
                                 try:
                                     await app.bot.delete_message(chat_id=chat_id, message_id=prev)
                                 except (BadRequest, Forbidden):
-                                    pass
+                                    logger.debug("Временное сообщение уже удалено в конце")
                                 except Exception as e:
                                     logger.warning(f"Ошибка удаления временного сообщения: {e}")
 
@@ -1755,7 +1755,7 @@ async def worker_loop(app):
                             try:
                                 await status_msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
                             except (BadRequest, Forbidden):
-                                pass
+                                logger.debug("Не удалось изменить статус (ожидаемо)")
                             except Exception as edit_e:
                                 logger.warning(f"Не удалось изменить статус: {edit_e}")
                         if "Forbidden" in str(e) or "Chat not found" in str(e):
