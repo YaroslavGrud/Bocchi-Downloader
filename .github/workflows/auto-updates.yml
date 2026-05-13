@@ -31,7 +31,6 @@ jobs:
               for f in filenames:
                   if f.endswith(('.yml', '.yaml')):
                       files.append(os.path.join(root, f))
-          
           for filepath in files:
               with open(filepath, "r") as f:
                   content = f.read()
