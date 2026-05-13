@@ -1,0 +1,141 @@
+name: 🤖 Copilot Autofix – Собрать готовые исправления в 1 PR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: write   # нужно для создания коммита autofix
+
+jobs:
+  collect-commits-and-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      BASE_BRANCH: main   # укажите вашу основную ветку, если не main
+
+    steps:
+      - name: 1. Получить список алертов с готовым Autofix
+        id: list_alerts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const alerts = await github.paginate(
+              'GET /repos/{owner}/{repo}/code-scanning/alerts',
+              { owner: context.repo.owner, repo: context.repo.repo,
+                state: 'open', tool_name: 'CodeQL', per_page: 100 }
+            );
+
+            // Фильтруем только те, где autofix.status === 'generated'
+            const ready = alerts.filter(a => a.autofix?.status === 'generated');
+
+            console.log(`Найдено ${ready.length} алертов с готовым Autofix`);
+            core.exportVariable('READY_ALERTS', ready.map(a => a.number).join(','));
+
+      - name: 2. Нажать «Commit to new branch» для каждого
+        id: create_commits
+        if: env.READY_ALERTS
+        uses: actions/github-script@v7
+        timeout-minutes: 15
+        with:
+          script: |
+            const numbers = process.env.READY_ALERTS.split(',');
+            const branches = [];
+
+            for (const num of numbers) {
+              try {
+                const response = await github.request(
+                  'POST /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix/commits',
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    alert_number: parseInt(num),
+                  }
+                );
+                const branch = response.data.ref;   // например, "refs/heads/autofix/alert-123-..."
+                const shortBranch = branch.replace('refs/heads/', '');
+                branches.push(shortBranch);
+                console.log(`#${num}: коммит создан в ветке ${shortBranch}`);
+              } catch (error) {
+                console.error(`#${num}: ошибка – ${error.message}`);
+              }
+              // задержка, чтобы не упереться в лимит (5 запросов в минуту)
+              await new Promise(resolve => setTimeout(resolve, 12000));
+            }
+
+            if (branches.length === 0) {
+              console.log('Не создано ни одной ветки — выходим');
+            }
+            core.exportVariable('FIX_BRANCHES', branches.join(','));
+            core.exportVariable('FIX_COUNT', branches.length.toString());
+
+      - name: 3. Объединить все ветки в одну общую
+        if: env.FIX_COUNT > 0
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const repoUrl = `https://x-access-token:${process.env.GITHUB_TOKEN}@github.com/${context.repo.owner}/${context.repo.repo}.git`;
+
+            execSync('git config --global user.email "actions@github.com"');
+            execSync('git config --global user.name "GitHub Actions"');
+
+            const base = process.env.BASE_BRANCH;
+            const mergeBranch = `autofix/combined-${Date.now()}`;
+
+            execSync(`git clone ${repoUrl} repo`);
+            process.chdir('repo');
+            execSync(`git checkout ${base}`);
+            execSync(`git checkout -b ${mergeBranch}`);
+
+            const fixBranches = process.env.FIX_BRANCHES.split(',');
+            for (const branch of fixBranches) {
+              console.log(`Мержим ${branch}...`);
+              try {
+                execSync(`git merge origin/${branch} --no-ff -m "Merge autofix ${branch}"`);
+              } catch (err) {
+                console.error(`Конфликт при мерже ${branch}: ${err.message}`);
+                execSync('git merge --abort');
+              }
+            }
+
+            // Пушим общую ветку
+            execSync(`git push origin ${mergeBranch}`);
+            core.exportVariable('MERGE_BRANCH', mergeBranch);
+
+      - name: 4. Создать Pull Request
+        if: env.MERGE_BRANCH
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const count = process.env.FIX_COUNT;
+            const pr = await github.request('POST /repos/{owner}/{repo}/pulls', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🤖 Copilot Autofix: ${count} исправлений одним PR`,
+              head: process.env.MERGE_BRANCH,
+              base: process.env.BASE_BRANCH,
+              body: `Объединены автоподстановки для ${count} алертов.\n\nВетки исправлений: ${process.env.FIX_BRANCHES}`,
+            });
+            console.log(`✅ PR создан: ${pr.data.html_url}`);
+
+      - name: 5. (Опционально) Удалить временные ветки
+        if: always() && env.FIX_BRANCHES
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branches = process.env.FIX_BRANCHES.split(',');
+            for (const b of branches) {
+              try {
+                await github.request('DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}', {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  branch: b,
+                });
+                console.log(`Удалена ветка ${b}`);
+              } catch (e) {
+                console.warn(`Не удалось удалить ${b}: ${e.message}`);
+              }
+            }
