@@ -2,8 +2,7 @@
 # Проект "Bocchi Downloader" (Raspberry Pi Edition)
 # Копирование и использование без разрешения автора запрещено.
 
-# Предварительная сборка не прошедшая финальное тестирование.
-# Может содержать ошибки.
+# Исправленная версия: убраны пустые блоки except
 
 import asyncio
 import logging
@@ -138,8 +137,8 @@ def add_stats(bytes_added):
                 current = float(f.read())
         with open(STATS_FILE, "w") as f:
             f.write(str(current + bytes_added))
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Ошибка обновления статистики: {e}")
 
 def get_formatted_stats():
     try:
@@ -152,14 +151,14 @@ def get_formatted_stats():
                 return f"{bytes_val:.2f} {unit}"
             bytes_val /= 1024.0
         return f"{bytes_val:.2f} ТБ"
-    except:
+    except Exception:
         return "0 Б"
 
 def get_v2raya_status():
     try:
         status = subprocess.check_output(["systemctl", "is-active", "v2raya"]).decode().strip()
         return "🟢 Включена" if status == "active" else "🔴 Выключена"
-    except:
+    except Exception:
         return "⚪ Статус неизвестен"
 
 def get_network_signal():
@@ -169,7 +168,7 @@ def get_network_signal():
             if len(lines) > 2:
                 data = lines[2].split()
                 return f"{data[3].replace('.', '')} дБм (Lnk: {data[2].replace('.', '')}/70)"
-    except:
+    except Exception:
         pass
     return "🔌 Ethernet"
 
@@ -178,14 +177,14 @@ def get_ping():
         output = subprocess.check_output(["ping", "-c", "1", "-W", "1", "ya.ru"], stderr=subprocess.STDOUT, text=True)
         match = re.search(r'time=([\d\.]+)', output)
         return float(match.group(1)) if match else 0.0
-    except:
+    except Exception:
         return 0.0
 
 def get_temp():
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
             return float(f.read()) / 1000.0
-    except:
+    except Exception:
         return None
 
 # --- АНИМИРОВАННАЯ ОТПРАВКА СООБЩЕНИЙ (С ПОВТОРНЫМИ ПОПЫТКАМИ И FALLBACK) ---
@@ -205,7 +204,7 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             except Exception:
                 try:
                     await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=" ")
-                except:
+                except Exception:
                     pass
             return msg
         except Exception as e:
@@ -262,7 +261,7 @@ async def worker(app):
                     except asyncio.TimeoutError:
                         try:
                             proc.kill()
-                        except:
+                        except Exception:
                             pass
                         if attempt == max_retries - 1:
                             await app.bot.send_message(
@@ -465,7 +464,7 @@ async def worker(app):
 
                 try:
                     await status_msg.delete()
-                except:
+                except Exception:
                     pass
 
             except Exception as e:
@@ -553,8 +552,8 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await update.message.delete()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение с токеном: {e}")
 
     status_msg = await update.message.reply_text("🔍 Заглядываю в твой токен...")
     try:
@@ -614,7 +613,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
-        except:
+        except Exception:
             pass
         now = time.time()
         last = last_auth_warning.get(user_id, 0)
@@ -647,7 +646,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
     return WAITING_FOR_LINK
 
@@ -873,7 +872,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     n_lvl = "стала какой-то слабой"
                 else:
                     n_lvl = "почти совсем пропала..."
-            except:
+            except Exception:
                 n_lvl = "вроде бы держится"
         elif "Eth" in net_signal or "кабель" in net_signal.lower():
             n_lvl = "подключена по проводам, тут всё надежно"
@@ -927,7 +926,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при обновлении статуса. Попробуй позже.")
                     try:
                         await context.bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-                    except:
+                    except Exception:
                         pass
                     context.user_data.pop('status_draft', None)
                     return
