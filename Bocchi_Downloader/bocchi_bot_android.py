@@ -467,7 +467,7 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TOKEN
     try:
         await update.message.delete()
-    except:
+    except Exception:
         pass
     status_msg = await update.message.reply_text("🔍 Заглядываю в твой токен...")
     try:
