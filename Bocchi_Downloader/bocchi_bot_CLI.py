@@ -807,7 +807,7 @@ async def cmd_start_download():
     try:
         await listener_task
     except asyncio.CancelledError:
-        pass
+        logging.debug("cancel_listener task was cancelled during shutdown.")
 
     print()
     if cancel_event.is_set():
