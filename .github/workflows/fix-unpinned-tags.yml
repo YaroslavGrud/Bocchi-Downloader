@@ -15,9 +15,10 @@ jobs:
 
       - name: Замена тегов на SHA
         id: pin
+        shell: bash
         run: |
-          python3 -c '
-          import os, re, subprocess, sys
+          python3 << 'PYEOF'
+          import os, re, subprocess
 
           workflows_dir = ".github/workflows"
           changed = False
@@ -65,8 +66,7 @@ jobs:
           
           with open(os.environ["GITHUB_OUTPUT"], "a") as fout:
               fout.write(f"changed={'true' if changed else 'false'}\n")
-          '
-        shell: bash
+          PYEOF
 
       - name: Создать Pull Request (если были изменения)
         if: steps.pin.outputs.changed == 'true'
