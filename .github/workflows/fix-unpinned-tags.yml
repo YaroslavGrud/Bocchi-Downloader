@@ -1,62 +1,65 @@
 name: "Закрепить SHA во всех workflow"
 
 on:
-  workflow_dispatch:   # запуск вручную
+  workflow_dispatch:
 
 permissions:
-  contents: write      # для создания ветки и коммита
-  pull-requests: write # для открытия PR
+  contents: write
+  pull-requests: write
 
 jobs:
   pin-actions:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout репозитория
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Замена тегов на SHA
-        env:
-          GH_TOKEN: ${{ github.token }}   # для GitHub CLI (на случай API-запросов)
+        id: pin
         run: |
-          # Ищем все workflow-файлы
+          echo "### Поиск и замена тегов..." | tee -a $GITHUB_STEP_SUMMARY
+          changed=false
           find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) | while read file; do
             echo "Обрабатываю $file"
-            
-            # Извлекаем строки с uses, у которых есть @v (тег)
-            grep -Eo '[^"]+@v[0-9]+(\.[0-9]+)*[^"]*' "$file" | while read line; do
-              # Пример строки: docker/login-action@v4
-              action=$(echo "$line" | awk -F'@' '{print $1}')
-              tag=$(echo "$line" | awk -F'@' '{print $2}')
-              
-              # Если тег уже SHA (длинный хэш), пропускаем
+            # Копируем файл, чтобы потом сравнить изменения
+            cp "$file" "$file.bak"
+            # Ищем uses: owner/repo@v... но не захватываем комментарии
+            grep -Po '(?<=uses: )\S+@v[0-9]+(\.[0-9]+)*(?=\s|$)' "$file" | while read full; do
+              action="${full%@*}"
+              tag="${full##*@}"
+              # Пропускаем уже закреплённые SHA
               if [[ "$tag" =~ ^[a-f0-9]{40}$ ]]; then
+                echo "✅ $action уже закреплён (SHA)" | tee -a $GITHUB_STEP_SUMMARY
                 continue
               fi
-              
-              echo "  Найден тег: $action@$tag"
-              
-              # Получаем SHA коммита тега через git ls-remote
+              echo "  🔄 $action@$tag → получаю SHA..."
               sha=$(git ls-remote "https://github.com/$action.git" "$tag" | awk '{print $1}')
-              
               if [ -n "$sha" ]; then
-                echo "  SHA: $sha"
-                # Заменяем @tag на @SHA (экранируем / в строке замены)
-                sed -i "s|$action@$tag|$action@$sha|g" "$file"
+                # Заменяем только полное совпадение uses: owner/repo@tag
+                sed -i "s|uses: $action@$tag|uses: $action@$sha|g" "$file"
+                echo "  ✅ Заменён на $sha" | tee -a $GITHUB_STEP_SUMMARY
+                changed=true
               else
-                echo "  ⚠️ Не удалось получить SHA для $action@$tag"
+                echo "  ⚠️ Не удалось получить SHA для $action@$tag" | tee -a $GITHUB_STEP_SUMMARY
               fi
             done
+            # Выводим изменения
+            if diff -q "$file" "$file.bak" >/dev/null; then
+              echo "  Нет изменений в $file"
+            else
+              echo "  Изменения внесены в $file"
+            fi
+            rm "$file.bak"
           done
+          echo "changed=$changed" >> $GITHUB_OUTPUT
 
       - name: Создать Pull Request
+        if: steps.pin.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
           commit-message: "🔒 Закрепить SHA во всех Action-ах"
-          title: "🔒 Закрепить SHA во всех workflow-файлах"
+          title: "🔒 Автоматическая привязка SHA"
           body: |
-            Автоматическая замена непривязанных тегов (например, `@v4`) на конкретные SHA-хеши коммитов.
-            Это устраняет предупреждения Semgrep о неиммутабельных версиях действий.
-            
-            **Проверьте изменения перед слиянием.**
+            Все непривязанные теги (`@v...`) заменены на актуальные SHA коммитов.
+            Это устраняет предупреждения Semgrep о неиммутабельных действиях.
           branch: fix/unpin-action-tags
           delete-branch: true
