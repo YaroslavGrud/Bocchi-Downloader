@@ -34,4 +34,4 @@ jobs:
           command: cves
           image: yaroslavgrud/bocchi-downloader-server-edition:latest
           exit-code: false
-          
+

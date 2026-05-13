@@ -27,11 +27,11 @@ jobs:
               for f in filenames:
                   if f.endswith(('.yml', '.yaml')):
                       files.append(os.path.join(root, f))
-          
+
           for filepath in files:
               with open(filepath, "r") as f:
                   content = f.read()
-              
+
               lines = content.splitlines()
               new_lines = []
               for line in lines:
@@ -58,12 +58,12 @@ jobs:
                           print(f"Не удалось получить SHA для {action}@{tag} в {filepath}")
                   else:
                       new_lines.append(line)
-              
+
               new_content = "\n".join(new_lines)
               if new_content != content:
                   with open(filepath, "w") as f:
                       f.write(new_content)
-          
+
           with open(os.environ["GITHUB_OUTPUT"], "a") as fout:
               fout.write(f"changed={'true' if changed else 'false'}\n")
           PYEOF
@@ -80,4 +80,4 @@ jobs:
           branch: fix/unpin-action-tags
           delete-branch: true
           token: ${{ secrets.PAT_TOKEN }}   # ← замена GITHUB_TOKEN на PAT
-          
+

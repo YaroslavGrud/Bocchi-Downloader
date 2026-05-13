@@ -150,4 +150,4 @@ jobs:
             Проверьте изменения перед слиянием.
           branch: auto-updates
           delete-branch: true
-          
+
