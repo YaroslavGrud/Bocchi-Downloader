@@ -163,7 +163,7 @@ def get_temp():
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
             return float(f.read()) / 1000.0
-    except:
+    except Exception:
         return None
 
 # --- ВОРКЕР (ЗАГРУЗКА) ---
