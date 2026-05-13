@@ -132,8 +132,8 @@ def add_stats(bytes_added):
                 current = float(f.read())
         with open(STATS_FILE, "w") as f:
             f.write(str(current + bytes_added))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Не удалось обновить статистику в {STATS_FILE}: {e}")
 
 def get_formatted_stats():
     try:
