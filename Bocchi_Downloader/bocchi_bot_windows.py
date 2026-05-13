@@ -423,8 +423,8 @@ async def worker(app):
 
                 try:
                     await status_msg.delete()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Не удалось удалить статусное сообщение: {e}")
 
             except Exception as e:
                 logger.error(f"Worker Error: {e}")
