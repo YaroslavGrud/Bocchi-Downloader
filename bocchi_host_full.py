@@ -1552,8 +1552,8 @@ async def worker_loop(app):
                         if lrc_file.exists():
                             try:
                                 lyrics = lrc_file.read_text(encoding='utf-8').strip()
-                            except Exception:
-                                pass
+                            except (OSError, UnicodeDecodeError) as lrc_err:
+                                logging.warning("Не удалось прочитать LRC файл %s: %s", lrc_file, lrc_err)
 
                         try:
                             if f_path.suffix.lower() == '.m4a':
