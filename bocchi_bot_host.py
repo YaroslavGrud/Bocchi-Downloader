@@ -682,7 +682,6 @@ async def cancel_download_callback(update: Update, context: ContextTypes.DEFAULT
 
 # ===================== ЭКСТРЕННАЯ ОСТАНОВКА (KILLSWITCH) =====================
 async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     await update.message.reply_text("🛑 Экстренная остановка… Убиваю процессы и чищу очередь.")
 
