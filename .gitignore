@@ -1,6 +1,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*.pyo
 *$py.class
 
 # Distribution / packaging
@@ -30,8 +31,8 @@ venv.bak/
 # IDE and editor files
 .vscode/
 .idea/
-*.swp
-*.swo
+*.sw[op]                # swp и swo
+*.orig                  # резервные копии при merge
 *~
 .DS_Store
 Thumbs.db
@@ -40,9 +41,13 @@ desktop.ini
 # Logs and databases
 logs/
 *.log
+*.log.*                 # ротированные логи
 *.sqlite
 *.sqlite3
 *.db
+
+# Caches
+.cache/
 
 # Environment variables and secrets
 .env
@@ -50,16 +55,15 @@ logs/
 .env.*.local
 *.env
 
-# Project specific data volumes
-data/
-bocchi_data/
-downloads/
+# Project specific data volumes (all persistent and temporary data)
+data/                   # основная папка данных (включает stats.txt, JSON-файлы)
+bocchi_data/            # альтернативное название (если используется)
+downloads/              # загруженные файлы
 temp/
 *.pid
 
 # Docker volumes (if mounted locally)
 docker/volumes/
-.terraform/
 
 # Test and coverage
 .pytest_cache/
@@ -78,14 +82,14 @@ htmlcov/
 *_local.sh
 *_personal.py
 
-# Output files
+# Output media files (avoid committing downloads)
 *.mp3
 *.m4a
 *.ogg
 *.zip
 *.rar
 
-# Statistics and state files (if generated in repo)
+# Statistics and state files (already inside data/, listed for clarity)
 stats.txt
 download_queue_state.json
 user_tokens.json

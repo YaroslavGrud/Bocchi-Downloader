@@ -13,84 +13,70 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}        🚀 BOCCHI DOWNLOADER — АВТО-УСТАНОВКА         ${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
 
-# 1. Проверка Docker
 if ! command -v docker &> /dev/null; then
-    echo -e "${RED}❌ Docker не установлен. Установите Docker и повторите запуск.${NC}"
+    echo -e "${RED}❌ Docker не установлен.${NC}"
     exit 1
 fi
 
-# 2. Очистка и подготовка рабочей директории
-echo -e "\n📁 Очистка и подготовка рабочей директории..."
+echo -e "\n📁 Подготовка директории..."
 rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
-cd "$WORKDIR"
+cd "$WORKDIR" || { echo -e "${RED}❌ Не удалось перейти в $WORKDIR${NC}"; exit 1; }
 
-# 3. Запрос токена Telegram (безопасный read -r)
-echo -e "\n🔑 Введите токен Telegram бота (можно получить у @BotFather):"
+echo -e "\n🔑 Введите токен Telegram бота:"
 printf "✏️  Токен: "
 read -r TOKEN
 
-# 4. Клонирование репозитория
 echo -e "\n📥 Клонирование репозитория (ветка $BRANCH)..."
 git clone --branch "$BRANCH" "$REPO_URL" .
 
-# 5. Запись .env
-echo "TELEGRAM_TOKEN=$TOKEN" > .env
-echo -e "${GREEN}✅ Токен сохранён в .env${NC}"
+cat > .env <<EOF
+TELEGRAM_TOKEN=$TOKEN
+BOT_MODE=stable
+EOF
+echo -e "${GREEN}✅ .env создан${NC}"
 
-# 6. Проверка наличия Dockerfile в репозитории
-if [ ! -f Dockerfile ]; then
-    echo -e "${RED}❌ Dockerfile не найден в репозитории!${NC}"
-    echo "Ожидается, что Dockerfile есть в корне. Скопируйте его вручную или укажите правильную ветку."
-    exit 1
+echo -e "\n📂 Настройка папки для данных..."
+mkdir -p "$WORKDIR/data"
+BOCCHI_UID=1000
+
+CURRENT_OWNER=$(stat -c "%u" "$WORKDIR/data" 2>/dev/null || echo "")
+if [ "$CURRENT_OWNER" != "$BOCCHI_UID" ]; then
+    if [ "$EUID" -eq 0 ]; then
+        chown -R "$BOCCHI_UID:$BOCCHI_UID" "$WORKDIR/data"
+        echo -e "${GREEN}✅ Права на data исправлены.${NC}"
+    else
+        echo -e "${RED}⚠️ Запустите скрипт с sudo для автоматической настройки прав,${NC}"
+        echo "   либо выполните: sudo chown -R $BOCCHI_UID:$BOCCHI_UID $WORKDIR/data"
+        printf "Нажмите Enter после исправления прав... "
+        read -r
+    fi
 fi
 
-# 7. Создание entrypoint.sh, если его нет в репозитории
-if [ ! -f entrypoint.sh ]; then
-    echo -e "\n📝 Создаём entrypoint.sh (адаптация под новый Dockerfile)..."
-    cat > entrypoint.sh <<'ENTRYPOINT_EOF'
-#!/bin/bash
-cd /app
-if [ -f "bocchi_host_full.py" ]; then
-    echo "🚀 Запускаем полную версию бота (bocchi_host_full.py)"
-    exec python bocchi_host_full.py
-elif [ -f "bocchi_bot_host.py" ]; then
-    echo "🚀 Запускаем классическую версию бота (bocchi_bot_host.py)"
-    exec python bocchi_bot_host.py
-else
-    echo "❌ Ошибка: не найден ни один файл бота!"
-    exit 1
-fi
-ENTRYPOINT_EOF
-    chmod +x entrypoint.sh
-    echo -e "${GREEN}✅ entrypoint.sh создан${NC}"
-else
-    echo -e "${GREEN}✅ entrypoint.sh уже есть в репозитории${NC}"
-fi
-
-# 8. Сборка образа (используем существующий Dockerfile)
 echo -e "\n🐳 Сборка Docker-образа..."
 docker build -t bocchi_bot .
 
-# 9. Остановка и удаление старого контейнера
 echo -e "\n🔄 Очистка старых контейнеров..."
 docker stop bocchi_bot 2>/dev/null || true
 docker rm bocchi_bot 2>/dev/null || true
 
-# 10. Запуск нового контейнера (именованный том для данных, не-root пользователь)
 echo -e "\n🚀 Запуск контейнера..."
 docker run -d \
     --name bocchi_bot \
     --restart unless-stopped \
+    --user "$BOCCHI_UID:$BOCCHI_UID" \
     --env-file .env \
-    -v bocchi_data:/app/data \
+    -v "$WORKDIR/data:/app/data" \
+    --tmpfs /tmp \
+    --tmpfs /var/tmp \
+    --read-only \
+    --security-opt no-new-privileges:true \
     bocchi_bot
 
-# 11. Финальные инструкции
 echo -e "\n${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║              ✅ БОТ УСПЕШНО ЗАПУЩЕН!                 ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
-echo -e "\n📋 Просмотр логов: docker logs -f bocchi_bot"
-echo -e "🛑 Остановка бота:   docker stop bocchi_bot"
-echo -e "▶️  Запуск бота:      docker start bocchi_bot"
-echo -e "💾 Данные хранятся в Docker volume: bocchi_data"
+echo -e "\n📋 Логи: docker logs -f bocchi_bot"
+echo -e "🛑 Остановка: docker stop bocchi_bot"
+echo -e "▶️  Запуск: docker start bocchi_bot"
+echo -e "💾 Данные на хосте: $WORKDIR/data"

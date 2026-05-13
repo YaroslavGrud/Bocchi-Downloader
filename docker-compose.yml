@@ -9,7 +9,7 @@ services:
     environment:
       - BOT_MODE=${BOT_MODE:-stable}
     volumes:
-      - bocchi_data:/app/data
+      - ./data:/app/data
       - type: tmpfs
         target: /tmp
       - type: tmpfs
@@ -17,7 +17,3 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
-
-volumes:
-  bocchi_data:
-    name: bocchi_data
