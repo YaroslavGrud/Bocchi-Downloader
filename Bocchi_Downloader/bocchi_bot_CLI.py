@@ -206,8 +206,8 @@ def cleanup():
         for old in LOG_DIR.glob("bocchi_*.log"):
             if old.stat().st_mtime < time.time() - 86400:
                 old.unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Не удалось очистить старые лог-файлы: %s", e)
     for d in Path('.').glob('bocchi_tmp_*'):
         try:
             shutil.rmtree(d, ignore_errors=True)
