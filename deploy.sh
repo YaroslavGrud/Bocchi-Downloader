@@ -32,9 +32,9 @@ git clone --branch "$BRANCH" "$REPO_URL" .
 
 cat > .env <<EOF
 TELEGRAM_TOKEN=$TOKEN
-BOT_MODE=stable
+BOT_MODE=beta
 EOF
-echo -e "${GREEN}✅ .env создан${NC}"
+echo -e "${GREEN}✅ .env создан (режим beta)${NC}"
 
 echo -e "\n📂 Настройка папки для данных..."
 mkdir -p "$WORKDIR/data"
@@ -69,9 +69,9 @@ docker run -d \
     -v "$WORKDIR/data:/app/data" \
     --tmpfs /tmp \
     --tmpfs /var/tmp \
-    --read-only \
     --security-opt no-new-privileges:true \
     bocchi_bot
+# Флаг --read-only удалён
 
 echo -e "\n${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║              ✅ БОТ УСПЕШНО ЗАПУЩЕН!                 ║${NC}"

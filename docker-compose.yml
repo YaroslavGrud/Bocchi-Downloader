@@ -7,13 +7,13 @@ services:
     env_file:
       - .env
     environment:
-      - BOT_MODE=${BOT_MODE:-stable}
+      - BOT_MODE=${BOT_MODE:-beta}      # теперь по умолчанию beta
     volumes:
       - ./data:/app/data
       - type: tmpfs
         target: /tmp
       - type: tmpfs
         target: /var/tmp
-    read_only: true
     security_opt:
       - no-new-privileges:true
+    # read_only: true   # Убрано — теперь бот может писать в /app

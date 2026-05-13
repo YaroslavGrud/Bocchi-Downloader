@@ -59,12 +59,12 @@ echo "🚀 Запускаем новый контейнер..."
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
+  --user 1000:1000 \
   -e TELEGRAM_TOKEN="${new_token}" \
   -e BOT_MODE=beta \
   -v "$(pwd)/data:/app/data" \
   --tmpfs /tmp \
   --tmpfs /var/tmp \
-  --read-only \
   --security-opt no-new-privileges:true \
   yaroslavgrud/bocchi-downloader-server-edition:latest
 
