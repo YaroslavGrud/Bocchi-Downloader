@@ -260,6 +260,7 @@ async def fetch_cover(uri):
             async with s.get(raw_url, timeout=aiohttp.ClientTimeout(15)) as r:
                 if r.status == 200:
                     return await r.read()
+        return None
     except Exception:
         return None
 
