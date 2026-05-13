@@ -786,8 +786,11 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
             try:
                 proc.kill()
                 await proc.wait()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    f"Не удалось корректно завершить процесс при отмене задачи "
+                    f"(chat_id={chat_id}, task_id={task_id}): {e}"
+                )
 
         if not last_track_sent and tmp_dir and tmp_dir.exists():
             files = list(tmp_dir.rglob('*.mp3')) + list(tmp_dir.rglob('*.m4a'))
