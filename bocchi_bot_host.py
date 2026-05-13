@@ -3,30 +3,28 @@
 # Релиз‑кандидат (исправлены пустые except)
 
 import asyncio
-import aiohttp
+import gc
+import io
+import json
 import logging
 import os
-import json
 import random
 import re
 import shutil
 import time
-import urllib.parse
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
-import io
-import gc
 
-import requests
-import psutil
+import aiohttp
+from PIL import Image
 from catboxpy import AsyncCatboxClient, LitterboxClient
 from dotenv import load_dotenv
+from mutagen import File
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
+from mutagen.id3 import ID3, USLT, TDRC, TCON, APIC, TPE2
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
-from mutagen import File
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 )
@@ -36,7 +34,6 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, filters
 )
 from yandex_music import ClientAsync
-from PIL import Image
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 load_dotenv()
