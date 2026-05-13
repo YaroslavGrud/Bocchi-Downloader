@@ -1,0 +1,34 @@
+name: "Удалить лишние пустые строки в workflow"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fix-empty-lines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Убрать лишние пустые строки в конце файла
+        run: |
+          for f in .github/workflows/*.yml; do
+            sed -i -e :a -e '/^\n*$/{$d;N;};/\n$/ba' "$f"
+          done
+
+      - name: Создать Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "🚿 Удалить лишние пустые строки в workflow"
+          title: "🚿 Удаление empty-lines (yamllint)"
+          body: |
+            Автоматическое удаление лишних пустых строк в конце файлов YAML.
+            Это исправляет ошибки yamllint о `empty-lines`.
+          branch: fix/empty-lines
+          delete-branch: true
+          token: ${{ secrets.PAT_TOKEN }}
