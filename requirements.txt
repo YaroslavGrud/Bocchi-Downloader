@@ -5,7 +5,7 @@ attrs==26.1.0
 certifi==2026.4.22
 charset-normalizer==3.4.7
 frozenlist==1.8.0
-idna==3.14
+idna==3.15
 multidict==6.7.1
 mutagen==1.47.0
 pillow==12.2.0
@@ -18,6 +18,4 @@ typing_extensions==4.15.0
 tzlocal==5.3.1
 urllib3==2.7.0
 yarl==1.23.0
-catboxpy
-# yandex-music-downloader из конкретного архива (форк)
-yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip
+catboxpy==0.1.1.1
