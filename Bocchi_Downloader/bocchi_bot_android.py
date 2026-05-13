@@ -518,7 +518,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
-        except:
+        except Exception:
             pass
         now = time.time()
         last = last_auth_warning.get(user_id, 0)
@@ -549,7 +549,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
     return WAITING_FOR_LINK
 
