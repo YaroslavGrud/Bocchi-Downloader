@@ -13,9 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Замена тегов на SHA (Python)
+      - name: Замена тегов на SHA
         id: pin
         run: |
+          python3 -c '
           import os, re, subprocess, sys
 
           workflows_dir = ".github/workflows"
@@ -27,24 +28,21 @@ jobs:
                       files.append(os.path.join(root, f))
           
           for filepath in files:
-              with open(filepath, 'r') as f:
+              with open(filepath, "r") as f:
                   content = f.read()
               
               lines = content.splitlines()
               new_lines = []
               for line in lines:
-                  # Ищем uses: owner/repo@vX.Y
-                  m = re.match(r'^(.*uses:\s+)([^@\s]+)@(v\d[\d.]*)(\s*.*)$', line)
+                  m = re.match(r"^(.*uses:\s+)([^@\s]+)@(v\d[\d.]*)(\s*.*)$", line)
                   if m:
                       prefix, action, tag, suffix = m.groups()
-                      # Если тег уже длинный SHA, пропускаем
-                      if re.fullmatch(r'[a-f0-9]{40}', tag):
+                      if re.fullmatch(r"[a-f0-9]{40}", tag):
                           new_lines.append(line)
                           continue
-                      # Получаем SHA через git ls-remote
                       repo_url = f"https://github.com/{action}.git"
                       try:
-                          result = subprocess.run(['git', 'ls-remote', repo_url, tag],
+                          result = subprocess.run(["git", "ls-remote", repo_url, tag],
                                                   capture_output=True, text=True, check=True)
                           sha = result.stdout.split()[0] if result.stdout.strip() else None
                       except Exception:
@@ -62,12 +60,13 @@ jobs:
               
               new_content = "\n".join(new_lines)
               if new_content != content:
-                  with open(filepath, 'w') as f:
+                  with open(filepath, "w") as f:
                       f.write(new_content)
           
-          # Устанавливаем output
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as fout:
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fout:
               fout.write(f"changed={'true' if changed else 'false'}\n")
+          '
+        shell: bash
 
       - name: Создать Pull Request (если были изменения)
         if: steps.pin.outputs.changed == 'true'
