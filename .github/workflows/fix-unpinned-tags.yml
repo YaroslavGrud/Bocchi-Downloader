@@ -6,6 +6,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  workflows: write        # необходимо для изменения файлов .github/workflows
 
 jobs:
   pin-actions:
