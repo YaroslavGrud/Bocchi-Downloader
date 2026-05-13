@@ -211,8 +211,8 @@ def cleanup():
     for d in Path('.').glob('bocchi_tmp_*'):
         try:
             shutil.rmtree(d, ignore_errors=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Не удалось удалить временную директорию %s: %s", d, e)
 
 atexit.register(cleanup)
 
