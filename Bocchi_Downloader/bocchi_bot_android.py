@@ -159,7 +159,7 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
                 await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-            except:
+            except Exception:
                 pass
             return msg
         except Exception as e:
