@@ -1,0 +1,62 @@
+name: "Закрепить SHA во всех workflow"
+
+on:
+  workflow_dispatch:   # запуск вручную
+
+permissions:
+  contents: write      # для создания ветки и коммита
+  pull-requests: write # для открытия PR
+
+jobs:
+  pin-actions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v4
+
+      - name: Замена тегов на SHA
+        env:
+          GH_TOKEN: ${{ github.token }}   # для GitHub CLI (на случай API-запросов)
+        run: |
+          # Ищем все workflow-файлы
+          find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) | while read file; do
+            echo "Обрабатываю $file"
+            
+            # Извлекаем строки с uses, у которых есть @v (тег)
+            grep -Eo '[^"]+@v[0-9]+(\.[0-9]+)*[^"]*' "$file" | while read line; do
+              # Пример строки: docker/login-action@v4
+              action=$(echo "$line" | awk -F'@' '{print $1}')
+              tag=$(echo "$line" | awk -F'@' '{print $2}')
+              
+              # Если тег уже SHA (длинный хэш), пропускаем
+              if [[ "$tag" =~ ^[a-f0-9]{40}$ ]]; then
+                continue
+              fi
+              
+              echo "  Найден тег: $action@$tag"
+              
+              # Получаем SHA коммита тега через git ls-remote
+              sha=$(git ls-remote "https://github.com/$action.git" "$tag" | awk '{print $1}')
+              
+              if [ -n "$sha" ]; then
+                echo "  SHA: $sha"
+                # Заменяем @tag на @SHA (экранируем / в строке замены)
+                sed -i "s|$action@$tag|$action@$sha|g" "$file"
+              else
+                echo "  ⚠️ Не удалось получить SHA для $action@$tag"
+              fi
+            done
+          done
+
+      - name: Создать Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "🔒 Закрепить SHA во всех Action-ах"
+          title: "🔒 Закрепить SHA во всех workflow-файлах"
+          body: |
+            Автоматическая замена непривязанных тегов (например, `@v4`) на конкретные SHA-хеши коммитов.
+            Это устраняет предупреждения Semgrep о неиммутабельных версиях действий.
+            
+            **Проверьте изменения перед слиянием.**
+          branch: fix/unpin-action-tags
+          delete-branch: true
