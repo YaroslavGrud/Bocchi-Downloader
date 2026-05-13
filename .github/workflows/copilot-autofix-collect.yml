@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 30
 
     env:
-      BASE_BRANCH: main     # замените на имя вашей основной ветки, если не main
+      BASE_BRANCH: Yaroslav_grud   # замените на имя вашей основной ветки, если не main
 
     steps:
       - name: 1. Получить список алертов с готовым Autofix
