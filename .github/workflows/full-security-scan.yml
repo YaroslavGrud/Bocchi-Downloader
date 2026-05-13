@@ -1,52 +1,121 @@
-name: "Полный анализ безопасности (единый файл)"
+name: "Полный анализ безопасности и качества"
 
 on:
-  workflow_dispatch:   # ручной запуск по кнопке
+  workflow_dispatch:
   schedule:
-    - cron: '0 4 * * 1'  # еженедельно (можно убрать или оставить)
+    - cron: '0 4 * * 1'   # еженедельно
 
 permissions:
   contents: read
   security-events: write
 
 jobs:
-  # ===================== CodeQL (Python) =====================
+  # ===================== Статический анализ (CodeQL + Semgrep) =====================
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-
+      - uses: actions/checkout@v4
       - name: Инициализация CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: python
           queries: +security-extended,security-and-quality
-
       - name: Анализ CodeQL
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:python"
 
-  # ===================== Semgrep (все языки) =====================
   semgrep:
     name: Semgrep
     runs-on: ubuntu-latest
     container:
       image: returntocorp/semgrep
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-
+      - uses: actions/checkout@v4
       - name: Запуск Semgrep
-        continue-on-error: true        # не останавливать воркфлоу при exit code 1
+        continue-on-error: true
         run: |
           semgrep ci \
             --config=auto \
             --sarif \
             --output=semgrep.sarif \
-            --verbose                   # покажет детали, почему может падать
-
+            --verbose
       - name: Загрузка SARIF в GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
+
+  # ===================== Качество и безопасность Python =====================
+  python-checks:
+    name: Python анализ
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Установка инструментов
+        run: |
+          pip install pip-audit bandit flake8 vulture pylint yamllint
+      - name: Аудит зависимостей (pip-audit)
+        continue-on-error: true
+        run: pip-audit -r requirements.txt
+      - name: Поиск мёртвого кода (vulture)
+        continue-on-error: true
+        run: vulture . --min-confidence 80
+      - name: Линтер стиля (flake8)
+        continue-on-error: true
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Проверка безопасности кода (bandit)
+        continue-on-error: true
+        run: bandit -r . -ll -f custom
+      - name: Линтер YAML-файлов
+        continue-on-error: true
+        run: yamllint .
+
+  # ===================== Проверка Docker =====================
+  dockerfile-lint:
+    name: Линтинг Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        continue-on-error: true
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+
+  # ===================== Сканирование секретов =====================
+  secrets-scan:
+    name: Поиск секретов (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===================== Дополнительные проверки (лицензии, JSON) =====================
+  extra-checks:
+    name: Лицензии и JSON
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Проверка лицензий зависимостей
+        continue-on-error: true
+        run: |
+          pip install pip-licenses
+          pip-licenses --allow-only="MIT License;Apache License 2.0;BSD License;Python Software Foundation License;Mozilla Public License 2.0"
+      - name: Валидация JSON файлов
+        continue-on-error: true
+        run: |
+          for f in $(find . -name "*.json"); do
+            python -m json.tool "$f" > /dev/null || echo "Invalid JSON: $f"
+          done
