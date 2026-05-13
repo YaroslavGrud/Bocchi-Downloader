@@ -2,17 +2,17 @@ name: Copilot Autofix — Единый PR для всех алертов
 
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: '0 6 * * 1'
 
 permissions:
   contents: write
   pull-requests: write
-  security-events: write   # ← было read, нужно write для запуска autofix
+  security-events: write
 
 jobs:
   batch-autofix-and-pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 60   # запас времени на медленные запросы
+
     steps:
       - name: 1. Получить список открытых алертов CodeQL
         id: list_alerts
@@ -37,37 +37,49 @@ jobs:
             core.exportVariable('ALERT_NUMBERS', alertsToFix.map(a => a.number).join(','));
             core.exportVariable('ALERT_COUNT', alertsToFix.length.toString());
 
-      - name: 2. Запустить генерацию Autofix для каждого алерта
+      - name: 2. Запустить генерацию Autofix для каждого алерта (с контролем лимита)
         if: env.ALERT_COUNT > 0
         uses: actions/github-script@v7
+        timeout-minutes: 45   # 91 * 8 сек = ~12 мин, запас для повторов
         with:
           script: |
             const numbers = process.env.ALERT_NUMBERS.split(',');
-            console.log(`Запрашиваем autofix для ${numbers.length} алертов...`);
+            console.log(`Запрашиваем autofix для ${numbers.length} алертов с паузой 8 сек...`);
             
             for (const num of numbers) {
-              try {
-                const response = await github.request(
-                  'POST /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix',
-                  {
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    alert_number: parseInt(num),
+              let success = false;
+              while (!success) {
+                try {
+                  const response = await github.request(
+                    'POST /repos/{owner}/{repo}/code-scanning/alerts/{alert_number}/autofix',
+                    {
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      alert_number: parseInt(num),
+                    }
+                  );
+                  console.log(`Алерт #${num}: ${response.status}`);
+                  success = true;
+                } catch (error) {
+                  if (error.message.includes('API rate limit exceeded')) {
+                    console.warn(`Rate limit для #${num}, ждём 60 секунд...`);
+                    await new Promise(resolve => setTimeout(resolve, 60000));
+                    // повторяем попытку для этого же алерта
+                  } else {
+                    console.error(`Ошибка при запросе autofix для алерта #${num}: ${error.message}`);
+                    success = true; // не зацикливаемся на других ошибках
                   }
-                );
-                console.log(`Алерт #${num}: ${response.status} ${response.data.message || ''}`);
-              } catch (error) {
-                console.error(`Ошибка при запросе autofix для алерта #${num}: ${error.message}`);
+                }
               }
-              // Задержка 1 секунда, чтобы не упереться в rate limit
-              await new Promise(resolve => setTimeout(resolve, 1000));
+              // Задержка 8 секунд между запросами (чтобы уложиться в ~7 запросов/мин)
+              await new Promise(resolve => setTimeout(resolve, 8000));
             }
 
       - name: 3. Ожидание готовности всех исправлений
         if: env.ALERT_COUNT > 0
         uses: actions/github-script@v7
         id: wait_for_fixes
-        timeout-minutes: 30   # увеличенный таймаут
+        timeout-minutes: 30
         with:
           script: |
             const numbers = process.env.ALERT_NUMBERS.split(',');
@@ -102,14 +114,13 @@ jobs:
                   const status = data.status;
                   console.log(`Алерт #${num}: статус = ${status}`);
                   
-                  // Учитываем как готовность, если статус "generated" или если есть поле fix с diff
+                  // Готово, если статус "generated", "success" или есть fix.diff
                   if (status === 'generated' || status === 'success' || (data.fix && data.fix.diff)) {
                     alertStatuses[num] = 'generated';
                   } else if (status === 'failed' || status === 'unavailable' || status === 'outdated') {
                     console.log(`Исправление для алерта #${num} недоступно (${status}). Пропускаем.`);
                     alertStatuses[num] = 'skipped';
                   } else {
-                    // pending или другое — продолжаем ждать
                     allReady = false;
                   }
                 } catch (error) {
