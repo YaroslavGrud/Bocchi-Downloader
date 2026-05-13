@@ -467,8 +467,8 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TOKEN
     try:
         await update.message.delete()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение с токеном: {e}")
     status_msg = await update.message.reply_text("🔍 Заглядываю в твой токен...")
     try:
         client = await asyncio.to_thread(Client(token).init)
