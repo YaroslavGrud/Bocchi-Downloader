@@ -1,0 +1,32 @@
+name: "Исправить trailing spaces в workflow"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fix-spaces:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Удалить пробелы в конце строк
+        run: |
+          find .github/workflows -type f -name "*.yml" -exec sed -i 's/[[:space:]]*$//' {} \;
+
+      - name: Создать Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "🚿 Удалить trailing spaces в workflow"
+          title: "🚿 Удаление trailing spaces (yamllint)"
+          body: |
+            Автоматическое удаление пробелов в конце строк во всех файлах `.github/workflows/*.yml`.
+            Это исправляет ошибки yamllint о trailing spaces.
+          branch: fix/trailing-spaces
+          delete-branch: true
+          token: ${{ secrets.PAT_TOKEN }}
