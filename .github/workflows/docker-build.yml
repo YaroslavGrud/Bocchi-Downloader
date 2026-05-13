@@ -27,4 +27,4 @@ jobs:
           tags: yaroslavgrud/bocchi-downloader-server-edition:latest
           secrets: |
             TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
-            
+
