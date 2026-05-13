@@ -146,7 +146,7 @@ def get_formatted_stats():
                 return f"{bytes_val:.2f} {unit}"
             bytes_val /= 1024.0
         return f"{bytes_val:.2f} ТБ"
-    except:
+    except Exception:
         return "0 Б"
 
 # ------------------------------------------------------------
