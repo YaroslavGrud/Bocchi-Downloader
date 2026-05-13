@@ -600,8 +600,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка во время выполнения статуса: {e}")
         try:
             await context.bot.send_message(chat_id, "❌ Произошла ошибка при формировании статуса.")
-        except Exception:
-            pass
+        except Exception as e_inner:
+            logger.debug(f"Не удалось отправить сообщение об ошибке в статусе: {e_inner}")
     finally:
         # Очищаем данные о черновике в любом случае
         context.user_data.pop('status_draft', None)
@@ -702,7 +702,8 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await status_msg.edit_text(f"✅ Ура! Я узнала тебя, {login}!")
                         await show_main_menu(update, context)
                         return WAITING_FOR_LINK
-    except Exception: pass
+    except Exception as e:
+        logger.debug(f"Ошибка при проверке токена через aiohttp: {e}")
     await status_msg.edit_text("❌ Токен не подходит… Попробуй ещё раз.")
     return WAITING_FOR_TOKEN
 
@@ -826,8 +827,8 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                                     disable_web_page_preview=True
                                 )
                                 uploaded = True
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Ошибка загрузки в litterbox при отмене: {e}")
                         if not uploaded:
                             try:
                                 catbox = AsyncCatboxClient()
@@ -840,8 +841,8 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
                                         disable_web_page_preview=True
                                     )
                                     uploaded = True
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Ошибка загрузки в catbox при отмене: {e}")
                         if not uploaded:
                             await context.bot.send_message(chat_id, "⚠️ Не удалось загрузить последний трек в облако.")
                     else:
@@ -918,8 +919,8 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 proc.kill()
                 await proc.wait()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Ошибка при kill процесса в emergency_stop: {e}")
 
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
@@ -964,14 +965,14 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
                 try:
                     proc.kill()
                     await proc.wait()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Ошибка при kill процесса в restart_stuck_task: {e}")
             msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
             if msg_id:
                 try:
                     await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Не удалось удалить сообщение при перезапуске задачи: {e}")
             task = info['task']
             current_task_info.pop(task_id)
             await download_queue.put(task)
