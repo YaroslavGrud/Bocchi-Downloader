@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: '0 4 * * 1'
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
   security-events: write
@@ -33,15 +36,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Запуск Semgrep
-        continue-on-error: true
         run: |
-          semgrep ci \
+          semgrep scan \
             --config=auto \
             --sarif \
             --output=semgrep.sarif \
             --verbose \
-            --no-suppress-errors \
-            --error=false
+            --no-suppress-errors || true
       - name: Загрузка SARIF в GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
