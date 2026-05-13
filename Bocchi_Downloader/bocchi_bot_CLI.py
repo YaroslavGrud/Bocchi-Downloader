@@ -193,8 +193,8 @@ def delete_token():
     token_timestamp = 0
     try:
         TOKEN_FILE.unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Не удалось удалить файл токена %s: %s", TOKEN_FILE, e)
 
 def is_token_valid():
     return user_token and (time.time() - token_timestamp) <= TOKEN_LIFETIME
