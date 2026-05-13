@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write      # достаточно для изменения любых файлов в репозитории
   pull-requests: write
-  workflows: write        # необходимо для изменения файлов .github/workflows
 
 jobs:
   pin-actions:
