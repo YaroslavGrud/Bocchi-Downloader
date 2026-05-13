@@ -32,7 +32,7 @@ from yandex_music import Client
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %name)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(message)s')
 logger = logging.getLogger("BocchiStation")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -159,8 +159,8 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
                 await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Не удалось удалить черновик: {e}")
             return msg
         except Exception as e:
             logger.warning(f"Анимация не удалась ({attempt+1}): {e}")
@@ -310,7 +310,8 @@ async def worker(app):
                     try:
                         f_path.rename(new_f_path)
                         f_path = new_f_path
-                    except:
+                    except Exception as rename_e:
+                        logger.warning(f"Ошибка переименования {f_path} -> {new_f_path}: {rename_e}")
                         shutil.move(str(f_path), str(new_f_path))
                         f_path = new_f_path
 
@@ -385,8 +386,8 @@ async def worker(app):
                             logger.error(f"Ошибка отправки финального сообщения или меню: {e}")
                 try:
                     await status_msg.delete()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Не удалось удалить сообщение {status_msg.message_id}: {e}")
 
             except Exception as e:
                 logger.error(f"Worker Error: {e}")
@@ -518,8 +519,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение {message.message_id}: {e}")
         now = time.time()
         last = last_auth_warning.get(user_id, 0)
         if now - last > WARNING_COOLDOWN:
@@ -549,8 +550,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await message.delete()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение {message.message_id}: {e}")
     return WAITING_FOR_LINK
 
 async def process_accumulated_links(user_id, chat_id, context, token):
