@@ -19,3 +19,5 @@ tzlocal==5.3.1
 urllib3==2.7.0
 yarl==1.23.0
 catboxpy==0.1.1.1
+# yandex-music-downloader из конкретного архива (форк)
+yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/main.zip
