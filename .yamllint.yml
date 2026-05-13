@@ -1,0 +1,8 @@
+extends: relaxed
+
+rules:
+  line-length:
+    max: 200
+  document-start: disable
+  truthy: disable
+  new-line-at-end-of-file: enable
