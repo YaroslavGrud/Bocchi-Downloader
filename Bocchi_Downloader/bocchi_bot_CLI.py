@@ -787,7 +787,7 @@ async def cmd_start_download():
                     cancel_event.set()
                     break
             except Exception:
-                pass
+                logging.debug("Ошибка в cancel_listener при чтении клавиши отмены.", exc_info=True)
             await asyncio.sleep(0.05)
 
     listener_task = asyncio.create_task(cancel_listener())
