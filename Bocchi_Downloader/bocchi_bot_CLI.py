@@ -18,7 +18,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, quote
+from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 from mutagen.easyid3 import EasyID3
