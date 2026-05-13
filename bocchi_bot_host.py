@@ -11,6 +11,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import time
 import uuid
 from pathlib import Path
@@ -29,6 +30,7 @@ from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 )
 from telegram.constants import ChatAction
+from telegram.error import BadRequest, Forbidden          # <-- добавлено
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, ConversationHandler, filters
@@ -172,6 +174,8 @@ async def cleanup_orphan_messages(app):
         try:
             await app.bot.delete_message(chat_id=info['chat_id'], message_id=info['message_id'])
             logger.info(f"Удалено висящее сообщение {info['message_id']} для задачи {task_id}")
+        except (BadRequest, Forbidden):
+            pass  # сообщение уже удалено или нет доступа – норма
         except Exception as e:
             logger.warning(f"Не удалось удалить сообщение {info['message_id']}: {e}")
         active_status_msgs.pop(task_id, None)
@@ -408,8 +412,8 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
                 await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-            except Exception:
-                pass
+            except (BadRequest, Forbidden):
+                pass  # draft может быть уже удалён – не страшно
             return msg
         except Exception as e:
             logger.warning(f"Анимация {attempt+1}: {e}")
@@ -541,8 +545,10 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TOKEN
     try:
         await update.message.delete()
+    except (BadRequest, Forbidden):
+        pass  # сообщение могло быть уже удалено – не критично
     except Exception as e:
-        logger.debug(f"Не удалось удалить сообщение с токеном: {e}")
+        logger.warning(f"Не удалось удалить сообщение с токеном: {e}")
 
     status_msg = await update.message.reply_text("🔍 Проверяю токен…")
 
@@ -642,14 +648,18 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
             try:
                 proc.kill()
                 await proc.wait()
-            except Exception:
-                pass
+            except ProcessLookupError:
+                pass  # процесс уже завершён
+            except Exception as e:
+                logger.warning(f"Ошибка при завершении процесса: {e}")
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except Exception:
+            except (BadRequest, Forbidden):
                 pass
+            except Exception as e:
+                logger.warning(f"Ошибка удаления статусного сообщения: {e}")
         current_task_info.pop(task_id, None)
         cancelled_count += 1
 
@@ -688,14 +698,18 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 proc.kill()
                 await proc.wait()
-            except Exception:
+            except ProcessLookupError:
                 pass
+            except Exception as e:
+                logger.warning(f"Ошибка при убийстве процесса: {e}")
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             try:
                 await context.bot.delete_message(chat_id=info['chat_id'], message_id=msg_id)
-            except Exception:
+            except (BadRequest, Forbidden):
                 pass
+            except Exception as e:
+                logger.warning(f"Не удалось удалить сообщение: {e}")
     current_task_info.clear()
 
     while not download_queue.empty():
@@ -730,14 +744,18 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
             proc.kill()
             await proc.wait()
             logger.info(f"Убит зависший процесс для задачи {stuck_task_id}")
+        except ProcessLookupError:
+            pass
         except Exception as e:
             logger.error(f"Ошибка при убийстве процесса: {e}")
     msg_id = active_status_msgs.pop(stuck_task_id, {}).get('message_id')
     if msg_id:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception:
+        except (BadRequest, Forbidden):
             pass
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение: {e}")
     current_task_info.pop(stuck_task_id, None)
     task = stuck_info['task']
     await download_queue.put(task)
@@ -826,8 +844,10 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
+        except (BadRequest, Forbidden):
+            pass
         except Exception as e:
-            logger.debug(f"Не удалось удалить сообщение со ссылкой: {e}")
+            logger.warning(f"Не удалось удалить сообщение со ссылкой: {e}")
         now = time.time()
         last = last_auth_warning.get(user_id, 0)
         if now - last > WARNING_COOLDOWN:
@@ -877,8 +897,10 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             await message.delete()
+        except (BadRequest, Forbidden):
+            pass
         except Exception as e:
-            logger.debug(f"Не удалось удалить сообщение: {e}")
+            logger.warning(f"Не удалось удалить сообщение: {e}")
         return WAITING_FOR_LINK
 
     async def safe_process():
@@ -910,15 +932,20 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await message.delete()
+    except (BadRequest, Forbidden):
+        pass
     except Exception as e:
-        logger.debug(f"Не удалось удалить сообщение: {e}")
+        logger.warning(f"Не удалось удалить сообщение: {e}")
 
     async def delete_confirm():
         await asyncio.sleep(5)
         try:
             await confirm_msg.delete()
-        except Exception:
-            pass
+        except (BadRequest, Forbidden):
+            logger.debug("Сообщение подтверждения уже удалено")
+        except Exception as e:
+            logger.warning(f"Ошибка при удалении подтверждения: {e}")
+
     asyncio.create_task(delete_confirm())
 
     return WAITING_FOR_LINK
@@ -1045,7 +1072,6 @@ async def process_accumulated_links(user_id, chat_id, context, token):
                 batch_info = {'name': album_title, 'artist': album_artist}
 
             elif content_type in ('playlist', 'uuid_playlist', 'iframe_playlist'):
-                # Прямой HTTP-запрос к API для надёжной работы с UUID
                 headers = {"Authorization": f"OAuth {token}"}
                 api_url = f"https://api.music.yandex.net/playlist/{content_id}"
                 async with aiohttp.ClientSession() as session:
@@ -1253,14 +1279,18 @@ async def worker_loop(app):
                         if old_info:
                             try:
                                 await app.bot.delete_message(chat_id=old_info['chat_id'], message_id=old_info['message_id'])
-                            except Exception:
+                            except (BadRequest, Forbidden):
                                 pass
+                            except Exception as e:
+                                logger.warning(f"Не удалось удалить старое сообщение: {e}")
                         prev = chat_temp_msg.pop(chat_id, None)
                         if prev:
                             try:
                                 await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                            except Exception:
+                            except (BadRequest, Forbidden):
                                 pass
+                            except Exception as e:
+                                logger.warning(f"Не удалось удалить временное сообщение: {e}")
 
                         tmp_dir.mkdir(parents=True, exist_ok=True)
                         keyboard = InlineKeyboardMarkup([
@@ -1355,6 +1385,8 @@ async def worker_loop(app):
                                         reply_markup=new_keyboard
                                     )
                                     logger.warning(f"Задача {task_id} зависла, добавлена кнопка перезапуска")
+                                except (BadRequest, Forbidden):
+                                    pass
                                 except Exception as e:
                                     logger.error(f"Не удалось обновить клавиатуру: {e}")
 
@@ -1367,8 +1399,10 @@ async def worker_loop(app):
                                     if prev:
                                         try:
                                             await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                                        except Exception:
+                                        except (BadRequest, Forbidden):
                                             pass
+                                        except Exception as e:
+                                            logger.warning(f"Не удалось удалить сообщение: {e}")
                                     msg = await app.bot.send_message(
                                         chat_id=chat_id,
                                         text=f"⚠️ На диске осталось всего {free_mb:.1f} МБ свободного места.\n"
@@ -1411,8 +1445,10 @@ async def worker_loop(app):
                                     if prev:
                                         try:
                                             await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                                        except Exception:
+                                        except (BadRequest, Forbidden):
                                             pass
+                                        except Exception as e:
+                                            logger.warning(f"Не удалось удалить сообщение: {e}")
                                     msg = await app.bot.send_message(
                                         chat_id=chat_id,
                                         text=f"⚠️ Серверу не хватило памяти для скачивания **{task['track_name']}**.\n"
@@ -1462,8 +1498,10 @@ async def worker_loop(app):
                             if prev:
                                 try:
                                     await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                                except Exception:
+                                except (BadRequest, Forbidden):
                                     pass
+                                except Exception as e:
+                                    logger.warning(f"Не удалось удалить сообщение: {e}")
                             msg = await app.bot.send_message(
                                 chat_id=chat_id,
                                 text=f"🎵 Трек **{task['track_name']}** скачан в качестве *{QUALITY_NAMES[actual_quality_used]}*.",
@@ -1602,8 +1640,10 @@ async def worker_loop(app):
                                 if status_msg:
                                     try:
                                         await status_msg.edit_text(f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на облако...")
-                                    except Exception:
+                                    except (BadRequest, Forbidden):
                                         pass
+                                    except Exception as e:
+                                        logger.warning(f"Не удалось изменить статусное сообщение: {e}")
                                 try:
                                     litterbox = LitterboxClient()
                                     url = await asyncio.wait_for(asyncio.to_thread(litterbox.upload_file, str(f_path), expire_time="24h"), timeout=CLOUD_TIMEOUT)
@@ -1637,6 +1677,18 @@ async def worker_loop(app):
                                             read_timeout=600, write_timeout=600
                                         )
                                     logger.info(f"Отправлен трек: {display_name}, длительность={duration}")
+                                except (BadRequest, Forbidden) as e:
+                                    logger.warning(f"Не удалось отправить аудио: {e}")
+                                    try:
+                                        with open(f_path, 'rb') as af:
+                                            await app.bot.send_document(
+                                                chat_id=chat_id,
+                                                document=af,
+                                                filename=safe_filename,
+                                                caption=f"🎵 {display_name}\nНе удалось отправить как аудио, файл во вложении."
+                                            )
+                                    except Exception as e2:
+                                        logger.error(f"Ошибка отправки документа: {e2}")
                                 except Exception as e:
                                     logger.error(f"Ошибка отправки аудио: {e}")
                                     try:
@@ -1676,29 +1728,37 @@ async def worker_loop(app):
                                         text=f"{finish_text}\nВыбери, что делать дальше:",
                                         reply_markup=main_markup
                                     )
+                                except (BadRequest, Forbidden):
+                                    pass
                                 except Exception as e:
                                     logger.error(f"Ошибка финального сообщения: {e}")
 
                             if status_msg:
+                                await asyncio.sleep(1)
                                 try:
-                                    await asyncio.sleep(1)
                                     await status_msg.delete()
-                                except Exception:
-                                    pass
+                                except (BadRequest, Forbidden):
+                                    logger.debug("Статусное сообщение уже удалено")
+                                except Exception as e:
+                                    logger.warning(f"Ошибка удаления статусного сообщения: {e}")
                             prev = chat_temp_msg.pop(chat_id, None)
                             if prev:
                                 try:
                                     await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                                except Exception:
+                                except (BadRequest, Forbidden):
                                     pass
+                                except Exception as e:
+                                    logger.warning(f"Ошибка удаления временного сообщения: {e}")
 
                     except Exception as e:
                         logger.error(f"Ошибка воркера: {e}", exc_info=True)
                         if status_msg:
                             try:
                                 await status_msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
-                            except Exception:
-                                await app.bot.send_message(chat_id=chat_id, text=f"❌ Ошибка: {str(e)[:200]}")
+                            except (BadRequest, Forbidden):
+                                pass
+                            except Exception as edit_e:
+                                logger.warning(f"Не удалось изменить статус: {edit_e}")
                         if "Forbidden" in str(e) or "Chat not found" in str(e):
                             add_pending_task(chat_id, task)
                     finally:
