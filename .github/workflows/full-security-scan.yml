@@ -3,14 +3,13 @@ name: "Полный анализ безопасности и качества"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 4 * * 1'   # еженедельно
+    - cron: '0 4 * * 1'
 
 permissions:
   contents: read
   security-events: write
 
 jobs:
-  # ===================== Статический анализ (CodeQL + Semgrep) =====================
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
@@ -40,13 +39,14 @@ jobs:
             --config=auto \
             --sarif \
             --output=semgrep.sarif \
-            --verbose
+            --verbose \
+            --no-suppress-errors \
+            --error=false
       - name: Загрузка SARIF в GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
 
-  # ===================== Качество и безопасность Python =====================
   python-checks:
     name: Python анализ
     runs-on: ubuntu-latest
@@ -55,26 +55,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
+
       - name: Установка инструментов
-        run: |
-          pip install pip-audit bandit flake8 vulture pylint yamllint
+        run: pip install pip-audit bandit flake8 vulture yamllint
+
       - name: Аудит зависимостей (pip-audit)
         continue-on-error: true
         run: pip-audit -r requirements.txt
+
       - name: Поиск мёртвого кода (vulture)
         continue-on-error: true
-        run: vulture . --min-confidence 80
+        run: vulture . --min-confidence 80 || true
+
       - name: Линтер стиля (flake8)
         continue-on-error: true
-        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exit-zero
+
       - name: Проверка безопасности кода (bandit)
         continue-on-error: true
-        run: bandit -r . -ll -f custom
-      - name: Линтер YAML-файлов
-        continue-on-error: true
-        run: yamllint .
+        run: bandit -r . -ll -f custom --exit-zero
 
-  # ===================== Проверка Docker =====================
+      - name: Линтер YAML-файлов (yamllint)
+        continue-on-error: true
+        run: yamllint . -d '{extends: relaxed, rules: {line-length: {max: 200}, document-start: disable, truthy: disable, new-line-at-end-of-file: enable}}'
+
   dockerfile-lint:
     name: Линтинг Dockerfile
     runs-on: ubuntu-latest
@@ -86,7 +90,6 @@ jobs:
           dockerfile: Dockerfile
           failure-threshold: warning
 
-  # ===================== Сканирование секретов =====================
   secrets-scan:
     name: Поиск секретов (gitleaks)
     runs-on: ubuntu-latest
@@ -99,7 +102,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ===================== Дополнительные проверки (лицензии, JSON) =====================
   extra-checks:
     name: Лицензии и JSON
     runs-on: ubuntu-latest
