@@ -77,7 +77,7 @@ jobs:
 
       - name: Линтер YAML-файлов (yamllint)
         continue-on-error: true
-        run: yamllint . -d '{extends: relaxed, rules: {line-length: {max: 200}, document-start: disable, truthy: disable, new-line-at-end-of-file: enable}}'
+        run: yamllint .
 
   dockerfile-lint:
     name: Линтинг Dockerfile
