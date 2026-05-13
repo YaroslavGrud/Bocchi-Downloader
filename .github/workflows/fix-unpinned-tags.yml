@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write      # достаточно для изменения любых файлов в репозитории
+  contents: write
   pull-requests: write
 
 jobs:
@@ -79,3 +79,4 @@ jobs:
             Это устраняет предупреждения Semgrep о неиммутабельных действиях.
           branch: fix/unpin-action-tags
           delete-branch: true
+          token: ${{ secrets.PAT_TOKEN }}   # ← замена GITHUB_TOKEN на PAT
