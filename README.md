@@ -13,53 +13,53 @@
 
 ## 📌 Состояние проекта
 
-| Показатель | Бейдж |
-|------------|-------|
-| Язык | [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)](https://www.python.org/) |
-| Лицензия | [![License: NonCommercial](https://img.shields.io/badge/License-NonCommercial-red?logo=gavel&logoColor=white)](LICENSE) |
+| Показатель | Бейдж                                                                                                                   |
+|------------|-------------------------------------------------------------------------------------------------------------------------|
+| Язык       | [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)](https://www.python.org/)              |
+| Лицензия   | [![License: NonCommercial](https://img.shields.io/badge/License-NonCommercial-red?logo=gavel&logoColor=white)](LICENSE) |
 
 ## 🔗 Доступ к дашбордам
 
-| Интерфейс | Бейдж |
-|-----------|-------|
+| Интерфейс                                    | Бейдж                                                                                                     |
+|----------------------------------------------|-----------------------------------------------------------------------------------------------------------|
 | **Bocchi Dashboard** (кастомный, порт 61209) | [![Bocchi Dashboard](https://img.shields.io/badge/Bocchi_Dashboard-ff69b4)](http://185.170.153.38:61209/) |
-| **Glances Web UI** (легаси, порт 61208) | [![Glances Web UI](https://img.shields.io/badge/Glances_UI-4c8c4c)](http://185.170.153.38:61208/) |
+| **Glances Web UI** (легаси, порт 61208)      | [![Glances Web UI](https://img.shields.io/badge/Glances_UI-4c8c4c)](http://185.170.153.38:61208/)         |
 
 ## 🐳 Серверная сборка (Docker)
 
-| Компонент | Бейдж |
-|-----------|-------|
-| GitHub Actions | [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/actions) |
-| Docker Hub | [![Docker Hub](https://img.shields.io/badge/Docker_Hub-0db7ed?logo=docker&logoColor=white)](https://hub.docker.com/r/yaroslavgrud/bocchi-downloader-server-edition) |
-| Dockerfile | [![Dockerfile](https://img.shields.io/badge/Dockerfile-2496ED?logo=docker&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Dockerfile) |
+| Компонент      | Бейдж                                                                                                                                                                                        |
+|----------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| GitHub Actions | [![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/actions)                       |
+| Docker Hub     | [![Docker Hub](https://img.shields.io/badge/Docker_Hub-0db7ed?logo=docker&logoColor=white)](https://hub.docker.com/r/yaroslavgrud/bocchi-downloader-server-edition)                          |
+| Dockerfile     | [![Dockerfile](https://img.shields.io/badge/Dockerfile-2496ED?logo=docker&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Dockerfile)                 |
 | docker-compose | [![docker-compose](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/docker-compose.yml) |
 
 ## 🤖 Версии бота
 
-| Режим | Бейдж |
-|-------|-------|
+| Режим      | Бейдж                                                                                                                                                                          |
+|------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Стабильная | [![Stable bot](https://img.shields.io/badge/bocchi__bot__host.py-стабильный-success)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/bocchi_bot_host.py) |
-| Бета | [![Beta bot](https://img.shields.io/badge/bocchi__host__full.py-бета-orange)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/bocchi_host_full.py) |
+| Бета       | [![Beta bot](https://img.shields.io/badge/bocchi__host__full.py-бета-orange)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/bocchi_host_full.py)        |
 
 ## 🖥️ Десктопные и мобильные версии
 
-| Платформа | Бейдж |
-|-----------|-------|
-| Windows | [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_windows.py) |
-| CLI (консоль) | [![CLI](https://img.shields.io/badge/CLI-4D4D4D?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_CLI.py) |
-| Raspberry Pi | [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-C51A4A?logo=raspberrypi&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_raspberry.py) |
-| Raspberry Pi Legacy | [![Raspberry Pi Legacy](https://img.shields.io/badge/Raspberry_Pi_Legacy-C51A4A?logo=raspberrypi&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_Legacy_bot_raspberry.py)
-| Android | [![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py) |
+| Платформа           | Бейдж                                                                                                                                                                                                                                     |
+|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Windows             | [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_windows.py)                    |
+| CLI (консоль)       | [![CLI](https://img.shields.io/badge/CLI-4D4D4D?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_CLI.py)                                                  |
+| Raspberry Pi        | [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-C51A4A?logo=raspberrypi&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_raspberry.py)                    |
+| Raspberry Pi Legacy | [![Raspberry Pi Legacy](https://img.shields.io/badge/Raspberry_Pi_Legacy-C51A4A?logo=raspberrypi&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_Legacy_bot_raspberry.py) |
+| Android             | [![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py)                                      |
 
 ## 🛠️ Управление и документация
 
-| Скрипт / Инструкция | Бейдж |
-|----------------------|-------|
-| Shell-инструкция | [![Shell guide](https://img.shields.io/badge/Shell-инструкция-0078D6?logo=gnu-bash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/readme_sh.md) |
-| CLI-инструкция | [![CLI guide](https://img.shields.io/badge/CLI-инструкция-0078D6?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/ReadmeCLI.md) |
-| Установка (deploy) | [![deploy.sh](https://img.shields.io/badge/deploy.sh-установка-116062?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/deploy.sh) |
-| Перезапуск (restart) | [![restart.sh](https://img.shields.io/badge/restart.sh-перезапуск-orange?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/restart.sh) |
-| Очистка (clean) | [![clean.sh](https://img.shields.io/badge/docker_clean.sh-очистка-C51A4A?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/docker_clean.sh) |
+| Скрипт / Инструкция  | Бейдж                                                                                                                                                                                         |
+|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Shell-инструкция     | [![Shell guide](https://img.shields.io/badge/Shell-инструкция-0078D6?logo=gnu-bash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/readme_sh.md)       |
+| CLI-инструкция       | [![CLI guide](https://img.shields.io/badge/CLI-инструкция-0078D6?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/ReadmeCLI.md)            |
+| Установка (deploy)   | [![deploy.sh](https://img.shields.io/badge/deploy.sh-установка-116062?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/deploy.sh)          |
+| Перезапуск (restart) | [![restart.sh](https://img.shields.io/badge/restart.sh-перезапуск-orange?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/restart.sh)      |
+| Очистка (clean)      | [![clean.sh](https://img.shields.io/badge/docker_clean.sh-очистка-C51A4A?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/docker_clean.sh) |
 
 ## ✨ Возможности
 
@@ -71,7 +71,7 @@
 - 📊 **Мониторинг состояния** (поддерживается не во всех версиях)
 - 🔄 **Обработка альбомов** с автоматическим разбиением на треки
 - 🚀 **Очередь загрузок** для стабильной работы
-- 🛡️ **Защита от ошибок** и таймаутов
+- 🛡️ **Защита от ошибок** и тайм-аутов
 
 ## 📋 Требования
 
@@ -129,15 +129,15 @@ bocchi_env/bin/python bocchi_bot_android.py
 
 ## 📊 Команды бота
 
-| Команда | Назначение | Доступность |
-|---------|------------|-------------|
-| `/start` | Запуск бота, авторизация, главное меню | **Все Telegram-версии** (host_full, host, raspberry, legacy, windows, android) |
-| `/status` | Состояние сервера (CPU, память, температура, очередь) | `bocchi_host_full.py`, `bocchi_bot_raspberry.py`, `bocchi_Legacy_bot_raspberry.py` |
-| `/logout` | Удалить сохранённый токен Яндекса | **Все Telegram-версии** |
-| `/quality` | Изменить качество загрузки (Низкое / Среднее / Высокое) | `bocchi_host_full.py`, `bocchi_bot_host.py` |
-| `/stop` | Экстренная (жёсткая) остановка всех загрузок | `bocchi_host_full.py`, `bocchi_bot_host.py` |
-| `/menu` | Показать главное меню с кнопками | Все серверные (host_full, host, raspberry), windows, android |
-| `/cancel` | Отменить текущий диалог (возврат в меню) | Все серверные, windows, android |
+| Команда    | Назначение                                              | Доступность                                                                        |
+|------------|---------------------------------------------------------|------------------------------------------------------------------------------------|
+| `/start`   | Запуск бота, авторизация, главное меню                  | **Все Telegram-версии** (host_full, host, raspberry, legacy, windows, android)     |
+| `/status`  | Состояние сервера (CPU, память, температура, очередь)   | `bocchi_host_full.py`, `bocchi_bot_raspberry.py`, `bocchi_Legacy_bot_raspberry.py` |
+| `/logout`  | Удалить сохранённый токен Яндекса                       | **Все Telegram-версии**                                                            |
+| `/quality` | Изменить качество загрузки (Низкое / Среднее / Высокое) | `bocchi_host_full.py`, `bocchi_bot_host.py`                                        |
+| `/stop`    | Экстренная (жёсткая) остановка всех загрузок            | `bocchi_host_full.py`, `bocchi_bot_host.py`                                        |
+| `/menu`    | Показать главное меню с кнопками                        | Все серверные (host_full, host, raspberry), windows, android                       |
+| `/cancel`  | Отменить текущий диалог (возврат в меню)                | Все серверные, windows, android                                                    |
 
 > [!NOTE]
 > **CLI-версия** (`bocchi_bot_CLI.py`) **не является Telegram-ботом** — это консольное приложение. Управление в нём осуществляется **цифрами** через текстовое меню, а не командами.

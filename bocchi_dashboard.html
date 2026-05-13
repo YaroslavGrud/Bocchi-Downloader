@@ -67,22 +67,27 @@
             background-color: #2ecc71;
             animation: pulse 1.4s ease-in-out infinite;
         }
+        /* noinspection CssUnusedSymbol */
         .led-red {
-            background-color: #ff4444;
-        }
-        @keyframes pulse {
-            0% { opacity: 0.3; transform: scale(0.8); }
-            50% { opacity: 1; transform: scale(1); }
-            100% { opacity: 0.3; transform: scale(0.8); }
+            background-color: #e74c3c;
+            animation: none;
         }
         .status-text-green {
             color: #2ecc71;
             font-weight: 500;
         }
+        /* noinspection CssUnusedSymbol */
         .status-text-red {
-            color: #ff4444;
+            color: #e74c3c;
             font-weight: 500;
         }
+
+        @keyframes pulse {
+            0% { opacity: 0.3; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1); }
+            100% { opacity: 0.3; transform: scale(0.8); }
+        }
+
         .system-info-bar {
             background: rgba(30, 30, 42, 0.7);
             border-radius: 24px;
@@ -143,7 +148,7 @@
         }
         .progress-fill {
             background: linear-gradient(90deg, #F5A0C5, #FF8EB5);
-            width: 0%;
+            width: 0;
             height: 100%;
             border-radius: 20px;
             transition: width 0.3s ease-out;
@@ -211,7 +216,7 @@
         </div>
     </div>
     <div class="system-info-bar">
-        <span><i class="fas fa-desktop"></i> <span id="osInfo">Ubuntu</span> · <span id="kernelInfo">загрузка...</span></span>
+        <span><i class="fas fa-desktop"></i> <span id="osinfo">Ubuntu</span> · <span id="kernelInfo">загрузка...</span></span>
         <span><i class="fas fa-clock"></i> Время работы: <span id="serverUptime">--</span></span>
     </div>
 
@@ -219,7 +224,7 @@
         <div class="card">
             <div class="card-title"><i class="fas fa-microchip"></i> Процессор</div>
             <div class="metric-row"><span class="metric-label">Загрузка</span><span class="metric-value" id="cpuPercent">0%</span></div>
-            <div class="progress-bar-bg"><div class="progress-fill" id="cpuFill" style="width:0%"></div></div>
+            <div class="progress-bar-bg"><div class="progress-fill" id="cpuFill" style="width:0"></div></div>
             <div class="metric-row"><span class="metric-label">Средняя нагрузка (1/5/15 мин)</span><span class="metric-value" id="loadAvg">0.00 / 0.00 / 0.00</span></div>
             <div class="chart-container">
                 <div class="custom-legend"><div class="legend-item"><span class="legend-color" style="background:#F5A0C5;"></span> Загрузка, %</div></div>
@@ -231,7 +236,7 @@
         <div class="card">
             <div class="card-title"><i class="fas fa-memory"></i> Оперативная память</div>
             <div class="metric-row"><span class="metric-label">Занято</span><span class="metric-value" id="ramUsed">0 MB</span></div>
-            <div class="progress-bar-bg"><div class="progress-fill" id="ramFill" style="width:0%"></div></div>
+            <div class="progress-bar-bg"><div class="progress-fill" id="ramFill" style="width:0"></div></div>
             <div class="metric-row"><span class="metric-label">Свободно</span><span class="metric-value" id="ramFree">0 MB</span></div>
             <div class="metric-row"><span class="metric-label">Всего</span><span class="metric-value" id="ramTotal">0 MB</span></div>
             <div class="chart-container">
@@ -260,7 +265,7 @@
         <div class="card">
             <div class="card-title"><i class="fas fa-hdd"></i> Диск</div>
             <div class="metric-row"><span class="metric-label">Использовано</span><span class="metric-value" id="diskUsed">0 GB</span></div>
-            <div class="progress-bar-bg"><div class="progress-fill" id="diskFill" style="width:0%"></div></div>
+            <div class="progress-bar-bg"><div class="progress-fill" id="diskFill" style="width:0"></div></div>
             <div class="metric-row"><span class="metric-label">Свободно</span><span class="metric-value" id="diskFree">0 GB</span></div>
             <div class="metric-row"><span class="metric-label">Всего</span><span class="metric-value" id="diskTotal">0 GB</span></div>
         </div>
@@ -269,6 +274,7 @@
 </div>
 
 <script>
+    /* global Chart */
     const API_BASE = '/api';
     const MAX_POINTS = 20;
     let timeLabels = [], cpuHistory = [], ramHistory = [], rxHistory = [], txHistory = [];
@@ -282,11 +288,6 @@
         if (bytes < 1024*1024) return { value: bytes / 1024, unit: 'KB' };
         if (bytes < 1024*1024*1024) return { value: bytes / (1024*1024), unit: 'MB' };
         return { value: bytes / (1024*1024*1024), unit: 'GB' };
-    }
-
-    function formatSize(bytes, decimals = 1) {
-        const { value, unit } = formatBytes(bytes);
-        return `${value.toFixed(decimals)} ${unit}`;
     }
 
     function formatSpeed(bytesPerSec) {
@@ -357,7 +358,7 @@
         for (const fs of data) {
             const type = fs.fs_type || '';
             const mnt = fs.mnt_point || '';
-            if (type === 'squashfs' || type === 'tmpfs' || type === 'devtmpfs' || type === 'overlay') continue;
+            if (type === 'Squashfs' || type === 'Tmpfs' || type === 'devtmpfs' || type === 'overlay') continue;
             if (mnt.startsWith('/snap/')) continue;
             if (fs.size > 0) {
                 totalUsed += fs.used;
@@ -373,7 +374,6 @@
         return titles[(number % 100 > 4 && number % 100 < 20) ? 2 : cases[(number % 10 < 5) ? number % 10 : 5]];
     }
 
-    // Универсальный парсер uptime с обязательным показом секунд
     function parseUptimeToRussian(uptimeStr) {
         if (!uptimeStr) return 'недоступно';
 
@@ -382,7 +382,7 @@
         const lower = uptimeStr.toLowerCase();
         if (lower === 'yesterday') return 'вчера';
 
-        let match = uptimeStr.match(/(\d+)\s+day[s]?,\s+(\d+):(\d+):(\d+)/i);
+        let match = uptimeStr.match(/(\d+)\s+days?,\s+(\d+):(\d+):(\d+)/i);
         if (match) {
             const days = parseInt(match[1]), hours = parseInt(match[2]), minutes = parseInt(match[3]), seconds = parseInt(match[4]);
             let total = days*86400 + hours*3600 + minutes*60 + seconds;
@@ -552,13 +552,43 @@
         } catch(e) { console.error('Network error', e); return { rx: 0, tx: 0 }; }
     }
     async function fetchSystem() {
-        try { const resp = await fetch(`${API_BASE}/4/system`); const data = await resp.json(); let osName = data.os_name || 'Linux'; if (osName === 'Linux') osName = 'Ubuntu 24.04 LTS'; document.getElementById('osInfo').innerText = osName; document.getElementById('kernelInfo').innerText = data.os_version || 'Linux'; } catch(e) { console.error(e); }
+        try { const resp = await fetch(`${API_BASE}/4/system`); const data = await resp.json(); let osName = data.os_name || 'Linux'; if (osName === 'Linux') osName = 'Ubuntu 24.04 LTS'; document.getElementById('osinfo').innerText = osName; document.getElementById('kernelInfo').innerText = data.os_version || 'Linux'; } catch(e) { console.error(e); }
     }
     async function fetchUptime() {
         try { const resp = await fetch(`${API_BASE}/4/uptime`); const data = await resp.json(); document.getElementById('serverUptime').innerText = parseUptimeToRussian(data); } catch(e) { console.error(e); document.getElementById('serverUptime').innerText = 'ошибка'; }
     }
     async function fetchContainers() {
-        try { const resp = await fetch(`${API_BASE}/4/containers`); if (!resp.ok) throw new Error('Containers API not available'); const containers = await resp.json(); if (Array.isArray(containers)) { const bot = containers.find(c => c.name === 'bocchi_bot'); if (bot) { document.getElementById('botLed').className = 'led led-green'; document.getElementById('botStatusText').className = 'status-text-green'; document.getElementById('botStatusText').innerText = 'Бот онлайн'; } else { document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; } } else { document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; } } catch(e) { console.error('Containers error', e); document.getElementById('botLed').className = 'led led-red'; document.getElementById('botStatusText').className = 'status-text-red'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; }
+        try {
+            const resp = await fetch(`${API_BASE}/4/containers`);
+            if (!resp.ok) {
+                document.getElementById('botLed').className = 'led led-red';
+                document.getElementById('botStatusText').className = 'status-text-red';
+                document.getElementById('botStatusText').innerText = 'Бот офлайн';
+                return;
+            }
+            const containers = await resp.json();
+            if (Array.isArray(containers)) {
+                const bot = containers.find(c => c.name === 'bocchi_bot');
+                if (bot) {
+                    document.getElementById('botLed').className = 'led led-green';
+                    document.getElementById('botStatusText').className = 'status-text-green';
+                    document.getElementById('botStatusText').innerText = 'Бот онлайн';
+                } else {
+                    document.getElementById('botLed').className = 'led led-red';
+                    document.getElementById('botStatusText').className = 'status-text-red';
+                    document.getElementById('botStatusText').innerText = 'Бот офлайн';
+                }
+            } else {
+                document.getElementById('botLed').className = 'led led-red';
+                document.getElementById('botStatusText').className = 'status-text-red';
+                document.getElementById('botStatusText').innerText = 'Бот офлайн';
+            }
+        } catch(e) {
+            console.error('Containers error', e);
+            document.getElementById('botLed').className = 'led led-red';
+            document.getElementById('botStatusText').className = 'status-text-red';
+            document.getElementById('botStatusText').innerText = 'Бот офлайн';
+        }
     }
 
     async function refreshData() {

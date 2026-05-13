@@ -1,10 +1,10 @@
-FROM python:3.14-slim-trixie
+FROM python:3.14
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg=7:7.* \
-    git=1:2.* \
+    ffmpeg \
+    git \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash bocchi
 
@@ -15,9 +15,7 @@ RUN git clone https://github.com/MarshalX/yandex-music-api .yandex-music-api && 
     pip install --no-cache-dir ".yandex-music-api[async]" && \
     rm -rf .yandex-music-api
 
-# Используем конкретный релиз, поэтому сознательно игнорируем DL3013
-# hadolint ignore=DL3013
-RUN pip install --no-cache-dir -U https://github.com/llistochek/yandex-music-downloader/archive/refs/tags/v3.5.5.zip
+RUN pip install --no-cache-dir https://github.com/llistochek/yandex-music-downloader/archive/refs/tags/v3.5.5.zip
 
 COPY requirements.txt .
 RUN grep -v "yandex-music" requirements.txt | grep -v "yandex-music-downloader" > requirements_clean.txt && \

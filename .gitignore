@@ -1,25 +1,93 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
-*.so
+*$py.class
+
+# Distribution / packaging
 .Python
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
 env/
 venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Конфигурация с секретами
-.env
-.env.example
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
 
-# Логи и статистика
+# Logs and databases
+logs/
 *.log
-stats.txt
+*.sqlite
+*.sqlite3
+*.db
 
-# Временные файлы бота
-bocchi_tmp_*
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Project specific data volumes
+data/
+bocchi_data/
+downloads/
+temp/
 *.pid
 
-# Резервные копии файлов
-*.bak
+# Docker volumes (if mounted locally)
+docker/volumes/
+.terraform/
 
-# Системные файлы
-.DS_Store
+# Test and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Temporary files (excluding already listed patterns)
+*.tmp
+*.bak
+*.lock
+
+# Scripts with local changes (optional)
+*_local.sh
+*_personal.py
+
+# Output files
+*.mp3
+*.m4a
+*.ogg
+*.zip
+*.rar
+
+# Statistics and state files (if generated in repo)
+stats.txt
+download_queue_state.json
+user_tokens.json
+active_status_msgs.json
+pending_tasks.json

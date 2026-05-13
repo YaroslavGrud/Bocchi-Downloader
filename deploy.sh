@@ -1,16 +1,11 @@
 #!/bin/bash
 set -e
 
-# ============================================================
-#  Единый скрипт развёртывания Bocchi Downloader
-#  (исправленная версия с полной очисткой)
-# ============================================================
-
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-WORKDIR=~/bocchi_bot
+WORKDIR="$HOME/bocchi_bot"
 REPO_URL="https://github.com/YaroslavGrud/Bocchi-Downloader.git"
 BRANCH="Yaroslav_grud"
 
@@ -18,100 +13,84 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}        🚀 BOCCHI DOWNLOADER — АВТО-УСТАНОВКА         ${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
 
-# 1. Проверка наличия Docker
+# 1. Проверка Docker
 if ! command -v docker &> /dev/null; then
     echo -e "${RED}❌ Docker не установлен. Установите Docker и повторите запуск.${NC}"
     exit 1
 fi
 
-# 2. Полная очистка и подготовка рабочей директории
+# 2. Очистка и подготовка рабочей директории
 echo -e "\n📁 Очистка и подготовка рабочей директории..."
-rm -rf "$WORKDIR"           # удаляем всё, что накопилось
+rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-# 3. Запрос токена Telegram (в переменную, пока не в файл)
+# 3. Запрос токена Telegram (безопасный read -r)
 echo -e "\n🔑 Введите токен Telegram бота (можно получить у @BotFather):"
-read -p "✏️  Токен: " TOKEN
+printf "✏️  Токен: "
+read -r TOKEN
 
-# 4. Клонирование репозитория (теперь папка гарантированно пуста)
+# 4. Клонирование репозитория
 echo -e "\n📥 Клонирование репозитория (ветка $BRANCH)..."
 git clone --branch "$BRANCH" "$REPO_URL" .
 
-# 5. Запись .env ПОСЛЕ клонирования
+# 5. Запись .env
 echo "TELEGRAM_TOKEN=$TOKEN" > .env
 echo -e "${GREEN}✅ Токен сохранён в .env${NC}"
 
-# 6. Создаём Dockerfile прямо здесь (перезаписываем, если есть)
-echo -e "\n🐳 Генерация Dockerfile с вшитым entrypoint..."
-cat > Dockerfile <<'DOCKERFILE_EOF'
-FROM python:3.11-slim
+# 6. Проверка наличия Dockerfile в репозитории
+if [ ! -f Dockerfile ]; then
+    echo -e "${RED}❌ Dockerfile не найден в репозитории!${NC}"
+    echo "Ожидается, что Dockerfile есть в корне. Скопируйте его вручную или укажите правильную ветку."
+    exit 1
+fi
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# 7. Создание entrypoint.sh, если его нет в репозитории
+if [ ! -f entrypoint.sh ]; then
+    echo -e "\n📝 Создаём entrypoint.sh (адаптация под новый Dockerfile)..."
+    cat > entrypoint.sh <<'ENTRYPOINT_EOF'
+#!/bin/bash
+cd /app
+if [ -f "bocchi_host_full.py" ]; then
+    echo "🚀 Запускаем полную версию бота (bocchi_host_full.py)"
+    exec python bocchi_host_full.py
+elif [ -f "bocchi_bot_host.py" ]; then
+    echo "🚀 Запускаем классическую версию бота (bocchi_bot_host.py)"
+    exec python bocchi_bot_host.py
+else
+    echo "❌ Ошибка: не найден ни один файл бота!"
+    exit 1
+fi
+ENTRYPOINT_EOF
+    chmod +x entrypoint.sh
+    echo -e "${GREEN}✅ entrypoint.sh создан${NC}"
+else
+    echo -e "${GREEN}✅ entrypoint.sh уже есть в репозитории${NC}"
+fi
 
-WORKDIR /app
-
-RUN git clone https://github.com/MarshalX/yandex-music-api && \
-    cd yandex-music-api && \
-    pip install --no-cache-dir . && \
-    pip install --no-cache-dir ".[async]" && \
-    cd .. && rm -rf yandex-music-api
-
-RUN pip install --no-cache-dir -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip
-
-COPY requirements.txt .
-RUN grep -v "yandex-music" requirements.txt | grep -v "yandex-music-downloader" > requirements_clean.txt && \
-    pip install --no-cache-dir -r requirements_clean.txt && rm requirements.txt requirements_clean.txt
-
-COPY . .
-
-ENV PYTHONUNBUFFERED=1
-RUN mkdir -p /app/data
-ENV STATS_FILE=/app/data/stats.txt
-
-RUN echo '#!/bin/bash\n\
-cd /app\n\
-if [ -f "bocchi_host_full.py" ]; then\n\
-    echo "🚀 Запускаем полную версию бота (bocchi_host_full.py)"\n\
-    exec python bocchi_host_full.py\n\
-elif [ -f "bocchi_bot_host.py" ]; then\n\
-    echo "🚀 Запускаем классическую версию бота (bocchi_bot_host.py)"\n\
-    exec python bocchi_bot_host.py\n\
-else\n\
-    echo "❌ Ошибка: не найден ни один файл бота!"\n\
-    exit 1\n\
-fi' > /entrypoint.sh && chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
-DOCKERFILE_EOF
-
-echo -e "${GREEN}✅ Dockerfile создан${NC}"
-
-# 7. Сборка образа
+# 8. Сборка образа (используем существующий Dockerfile)
 echo -e "\n🐳 Сборка Docker-образа..."
 docker build -t bocchi_bot .
 
-# 8. Остановка и удаление старого контейнера
+# 9. Остановка и удаление старого контейнера
 echo -e "\n🔄 Очистка старых контейнеров..."
 docker stop bocchi_bot 2>/dev/null || true
 docker rm bocchi_bot 2>/dev/null || true
 
-# 9. Запуск нового контейнера
+# 10. Запуск нового контейнера (именованный том для данных, не-root пользователь)
 echo -e "\n🚀 Запуск контейнера..."
 docker run -d \
     --name bocchi_bot \
     --restart unless-stopped \
     --env-file .env \
-    -v "$(pwd)/data:/app/data" \
+    -v bocchi_data:/app/data \
     bocchi_bot
 
-# 10. Финал
+# 11. Финальные инструкции
 echo -e "\n${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║              ✅ БОТ УСПЕШНО ЗАПУЩЕН!                 ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
 echo -e "\n📋 Просмотр логов: docker logs -f bocchi_bot"
 echo -e "🛑 Остановка бота:   docker stop bocchi_bot"
 echo -e "▶️  Запуск бота:      docker start bocchi_bot"
+echo -e "💾 Данные хранятся в Docker volume: bocchi_data"

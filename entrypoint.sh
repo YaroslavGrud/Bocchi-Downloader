@@ -1,5 +1,8 @@
 #!/bin/bash
-cd /app
+set -e  # выход при любой ошибке
+
+# Переход в рабочую директорию с проверкой
+cd /app || { echo "❌ Ошибка: не удалось перейти в /app"; exit 1; }
 
 echo "=== Bocchi Downloader ==="
 echo "BOT_MODE = ${BOT_MODE:-default}"

@@ -113,14 +113,14 @@ curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaro
 
 ## Команды управления контейнером
 
-| Команда | Описание |
-|---------|----------|
-| `docker start bocchi-bot` | ▶️ Запустить остановленный контейнер |
-| `docker stop bocchi-bot`  | 🛑 Остановить контейнер |
-| `docker restart bocchi-bot` | 🔄 Перезапустить контейнер |
-| `docker logs -f bocchi-bot` | 📋 Просмотр логов в реальном времени |
-| `docker stats bocchi-bot` | 📊 Потребление ресурсов контейнером (CPU, RAM, сеть) |
-| `docker exec -it bocchi-bot bash` | 🖥️ Зайти внутрь контейнера |
+| Команда                           | Описание                                             |
+|-----------------------------------|------------------------------------------------------|
+| `docker start bocchi-bot`         | ▶️ Запустить остановленный контейнер                 |
+| `docker stop bocchi-bot`          | 🛑 Остановить контейнер                              |
+| `docker restart bocchi-bot`       | 🔄 Перезапустить контейнер                           |
+| `docker logs -f bocchi-bot`       | 📋 Просмотр логов в реальном времени                 |
+| `docker stats bocchi-bot`         | 📊 Потребление ресурсов контейнером (CPU, RAM, сеть) |
+| `docker exec -it bocchi-bot bash` | 🖥️ Зайти внутрь контейнера                          |
 
 ## Мониторинг сервера (glances)
 
