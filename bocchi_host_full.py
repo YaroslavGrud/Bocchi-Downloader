@@ -274,8 +274,8 @@ async def cleanup_orphan_messages(app):
     for task_id, info in list(active_status_msgs.items()):
         try:
             await app.bot.delete_message(chat_id=info['chat_id'], message_id=info['message_id'])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить orphan сообщение {task_id}: {e}")
         active_status_msgs.pop(task_id, None)
     save_active_msgs()
 
@@ -337,8 +337,8 @@ async def fetch_cover_from_yandex(cover_uri: str) -> bytes | None:
             async with session.get(cover_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status == 200:
                     return await resp.read()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось получить обложку: {e}")
     return None
 
 def compress_cover(cover_bytes: bytes, max_size_bytes: int = 200 * 1024) -> bytes | None:
@@ -383,8 +383,8 @@ def extract_cover_from_audio(file_path: Path) -> bytes | None:
             if 'covr' in audio.tags and audio.tags['covr']:
                 if isinstance(audio.tags['covr'][0], MP4Cover):
                     return bytes(audio.tags['covr'][0])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось извлечь обложку из аудио: {e}")
     return None
 
 def get_audio_duration(file_path: Path) -> int:
@@ -420,8 +420,8 @@ def add_stats(bytes_added: int):
                 current = float(f.read())
         with open(STATS_FILE_PATH, "w") as f:
             f.write(str(current + bytes_added))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось обновить статистику: {e}")
 
 def get_formatted_stats() -> str:
     try:
@@ -444,8 +444,8 @@ def get_ping() -> float:
         match = re.search(r'time=([\d\.]+)', out)
         if match:
             return float(match.group(1))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Ошибка при проверке ping: {e}")
     return 0.0
 
 def get_user_quality(context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -669,8 +669,10 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not token:
         await update.message.reply_text("❌ Не удалось найти токен.")
         return WAITING_FOR_TOKEN
-    try: await update.message.delete()
-    except Exception: pass
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение при сохранении токена: {e}")
     status_msg = await update.message.reply_text("🔍 Проверяю токен…")
     try:
         client = ClientAsync(token)
@@ -1002,8 +1004,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if now - last_time < COMMAND_COOLDOWN:
             try:
                 await update.message.delete()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Не удалось удалить сообщение при проверке cooldown: {e}")
             return WAITING_FOR_LINK
         last_command_time[user_id] = now
 
@@ -1062,8 +1064,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение при невалидном токене: {e}")
         now = time.time()
         last_warn = last_auth_warning.get(user_id, 0)
         if now - last_warn > WARNING_COOLDOWN:
@@ -1092,8 +1094,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, "🔄 Я пока занята предыдущей загрузкой… Подожди немножко.")
         try:
             await message.delete()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить исходное сообщение: {e}")
         return WAITING_FOR_LINK
 
     async def safe_process():
@@ -1117,15 +1119,15 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                                  reply_to_message_id=message.message_id)
     try:
         await message.delete()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение после подтверждения: {e}")
 
     async def delete_confirm():
         await asyncio.sleep(5)
         try:
             await confirm_msg.delete()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить подтверждающее сообщение: {e}")
     asyncio.create_task(delete_confirm())
 
     return WAITING_FOR_LINK
@@ -1380,14 +1382,14 @@ async def worker_loop(app):
                     if old:
                         try:
                             await app.bot.delete_message(chat_id=old['chat_id'], message_id=old['message_id'])
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Не удалось удалить старое статусное сообщение {old.get('message_id')}: {e}")
                     prev = chat_temp_msg.pop(chat_id, None)
                     if prev:
                         try:
                             await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Не удалось удалить предыдущее сообщение чата {chat_id}: {e}")
 
                     tmp_dir.mkdir(exist_ok=True)
 
@@ -1474,8 +1476,8 @@ async def worker_loop(app):
                             ])
                             try:
                                 await app.bot.edit_message_reply_markup(chat_id, status_msg.message_id, reply_markup=new_keyboard)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Не удалось обновить клавиатуру статусного сообщения: {e}")
 
                         enough, free_mb = check_disk_space()
                         if not enough:
@@ -1674,8 +1676,8 @@ async def worker_loop(app):
                     if status_msg:
                         try:
                             await status_msg.delete()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug(f"Не удалось удалить статусное сообщение {status_msg.message_id}: {e}")
                     save_active_msgs()
                     save_queue_state()
                     active_tasks_count -= 1
