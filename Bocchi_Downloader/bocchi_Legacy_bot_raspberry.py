@@ -741,7 +741,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     n_lvl = "стала какой-то слабой"
                 else:
                     n_lvl = "почти совсем пропала..."
-            except:
+            except (AttributeError, ValueError):
                 n_lvl = "вроде бы держится"
         elif "Eth" in net_signal or "кабель" in net_signal.lower():
             n_lvl = "подключена по проводам, тут всё надежно"
