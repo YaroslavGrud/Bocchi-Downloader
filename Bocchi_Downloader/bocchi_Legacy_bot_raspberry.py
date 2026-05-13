@@ -199,8 +199,8 @@ async def worker(app: Application):
                 except asyncio.TimeoutError:
                     try:
                         proc.kill()
-                    except:
-                        pass
+                    except ProcessLookupError as e:
+                        logger.debug(f"Не удалось завершить процесс загрузки после таймаута: {e}")
                     await app.bot.send_message(
                         chat_id=task['chat_id'],
                         text="Ой... Кажется, я слишком долго пытаюсь это скачать. Сервер молчит, поэтому я вынуждена прерваться, чтобы не заставлять других ждать в очереди 🎸"
