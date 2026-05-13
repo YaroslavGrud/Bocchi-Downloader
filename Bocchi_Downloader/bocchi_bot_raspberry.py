@@ -2,7 +2,7 @@
 # Проект "Bocchi Downloader" (Raspberry Pi Edition)
 # Копирование и использование без разрешения автора запрещено.
 
-# Исправленная версия: убраны пустые блоки except
+# Исправленная версия: убраны пустые блоки except (добавлено логирование)
 
 import asyncio
 import logging
@@ -151,14 +151,16 @@ def get_formatted_stats():
                 return f"{bytes_val:.2f} {unit}"
             bytes_val /= 1024.0
         return f"{bytes_val:.2f} ТБ"
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Ошибка форматирования статистики: {e}")
         return "0 Б"
 
 def get_v2raya_status():
     try:
         status = subprocess.check_output(["systemctl", "is-active", "v2raya"]).decode().strip()
         return "🟢 Включена" if status == "active" else "🔴 Выключена"
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Не удалось получить статус v2raya: {e}")
         return "⚪ Статус неизвестен"
 
 def get_network_signal():
@@ -168,8 +170,8 @@ def get_network_signal():
             if len(lines) > 2:
                 data = lines[2].split()
                 return f"{data[3].replace('.', '')} дБм (Lnk: {data[2].replace('.', '')}/70)"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось прочитать /proc/net/wireless: {e}")
     return "🔌 Ethernet"
 
 def get_ping():
@@ -177,14 +179,16 @@ def get_ping():
         output = subprocess.check_output(["ping", "-c", "1", "-W", "1", "ya.ru"], stderr=subprocess.STDOUT, text=True)
         match = re.search(r'time=([\d\.]+)', output)
         return float(match.group(1)) if match else 0.0
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Ping не удался: {e}")
         return 0.0
 
 def get_temp():
     try:
         with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
             return float(f.read()) / 1000.0
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Не удалось прочитать температуру: {e}")
         return None
 
 # --- АНИМИРОВАННАЯ ОТПРАВКА СООБЩЕНИЙ (С ПОВТОРНЫМИ ПОПЫТКАМИ И FALLBACK) ---
@@ -201,11 +205,12 @@ async def send_animated_message(bot, chat_id, text, delay=0.4, max_retries=3, **
             msg = await bot.send_message(chat_id=chat_id, text=text, **kwargs)
             try:
                 await bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Не удалось удалить черновик {draft_id}: {e}")
                 try:
                     await bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=" ")
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.debug(f"Не удалось очистить черновик: {e2}")
             return msg
         except Exception as e:
             logger.warning(f"Попытка {attempt+1}/{max_retries} анимации не удалась: {e}")
@@ -261,8 +266,8 @@ async def worker(app):
                     except asyncio.TimeoutError:
                         try:
                             proc.kill()
-                        except Exception:
-                            pass
+                        except Exception as kill_e:
+                            logger.debug(f"Не удалось убить процесс при таймауте: {kill_e}")
                         if attempt == max_retries - 1:
                             await app.bot.send_message(
                                 chat_id=task['chat_id'],
@@ -464,8 +469,8 @@ async def worker(app):
 
                 try:
                     await status_msg.delete()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Не удалось удалить статусное сообщение {status_msg.message_id}: {e}")
 
             except Exception as e:
                 logger.error(f"Worker Error: {e}")
@@ -613,8 +618,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение {message.message_id}: {e}")
         now = time.time()
         last = last_auth_warning.get(user_id, 0)
         if now - last > WARNING_COOLDOWN:
@@ -646,8 +651,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await message.delete()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение {message.message_id}: {e}")
     return WAITING_FOR_LINK
 
 async def process_accumulated_links(user_id, chat_id, context, token):
@@ -926,8 +931,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(chat_id=chat_id, text="❌ Ошибка при обновлении статуса. Попробуй позже.")
                     try:
                         await context.bot.delete_draft(chat_id=chat_id, draft_id=draft_id)
-                    except Exception:
-                        pass
+                    except Exception as del_e:
+                        logger.debug(f"Не удалось удалить черновик после ошибки: {del_e}")
                     context.user_data.pop('status_draft', None)
                     return
                 await asyncio.sleep(0.5)
