@@ -914,8 +914,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Ошибка обработки: {e}", exc_info=True)
             try:
                 await context.bot.send_message(chat_id, f"❌ Ой-ой… Что-то пошло не так: {str(e)[:200]}")
-            except Exception:
-                pass
+            except Exception as notify_error:
+                logger.debug("Не удалось отправить сообщение об ошибке пользователю: %s", notify_error, exc_info=True)
         finally:
             user_processing.pop(user_id, None)
             link_accumulators.pop(user_id, None)
