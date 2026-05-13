@@ -133,8 +133,8 @@ def add_stats(bytes_added):
                 current = float(f.read())
         with open(STATS_FILE, "w") as f:
             f.write(str(current + bytes_added))
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Ошибка обновления статистики: {e}")
 
 def get_formatted_stats():
     try:
@@ -147,7 +147,7 @@ def get_formatted_stats():
                 return f"{bytes_val:.2f} {unit}"
             bytes_val /= 1024.0
         return f"{bytes_val:.2f} ТБ"
-    except:
+    except Exception:
         return "0 Б"
 
 # --- АНИМИРОВАННАЯ ОТПРАВКА СООБЩЕНИЙ ---
@@ -511,8 +511,8 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await update.message.delete()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение с токеном: {e}")
 
     status_msg = await update.message.reply_text("🔍 Заглядываю в твой токен...")
     try:
@@ -568,8 +568,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение со ссылкой: {e}")
         now = time.time()
         last = last_auth_warning.get(user_id, 0)
         if now - last > WARNING_COOLDOWN:
@@ -601,8 +601,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await message.delete()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение со ссылкой: {e}")
     return WAITING_FOR_LINK
 
 async def process_accumulated_links(user_id, chat_id, context, token):
