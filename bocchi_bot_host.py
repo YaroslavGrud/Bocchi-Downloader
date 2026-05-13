@@ -1,6 +1,6 @@
 # (c) 2026 Hanako
 # Bocchi Downloader (Server Edition)
-# Релиз‑кандидат
+# Релиз‑кандидат (исправлены пустые except)
 
 import asyncio
 import aiohttp
@@ -327,8 +327,11 @@ def cleanup_old_tmp_dirs():
     count = 0
     for tmp_dir in Path('.').glob('bocchi_tmp_*'):
         if tmp_dir.is_dir():
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            count += 1
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                count += 1
+            except Exception as e:
+                logger.error(f"Не удалось удалить папку {tmp_dir}: {e}")
     if count:
         logger.info(f"Удалено временных папок: {count}")
 
@@ -340,8 +343,8 @@ def add_stats(bytes_added):
                 current = float(f.read())
         with open(STATS_FILE, "w") as f:
             f.write(str(current + bytes_added))
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Ошибка обновления статистики: {e}")
 
 def get_user_quality(context: ContextTypes.DEFAULT_TYPE) -> int:
     return context.user_data.get('quality', DEFAULT_QUALITY)
@@ -541,8 +544,9 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_FOR_TOKEN
     try:
         await update.message.delete()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение с токеном: {e}")
+
     status_msg = await update.message.reply_text("🔍 Проверяю токен…")
 
     # Попытка 1: через ClientAsync
@@ -641,13 +645,13 @@ async def cancel_download(update: Update, context: ContextTypes.DEFAULT_TYPE, is
             try:
                 proc.kill()
                 await proc.wait()
-            except:
+            except Exception:
                 pass
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except:
+            except Exception:
                 pass
         current_task_info.pop(task_id, None)
         cancelled_count += 1
@@ -688,13 +692,13 @@ async def emergency_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 proc.kill()
                 await proc.wait()
-            except:
+            except Exception:
                 pass
         msg_id = active_status_msgs.pop(task_id, {}).get('message_id')
         if msg_id:
             try:
                 await context.bot.delete_message(chat_id=info['chat_id'], message_id=msg_id)
-            except:
+            except Exception:
                 pass
     current_task_info.clear()
 
@@ -736,7 +740,7 @@ async def restart_stuck_task_callback(update: Update, context: ContextTypes.DEFA
     if msg_id:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except:
+        except Exception:
             pass
     current_task_info.pop(stuck_task_id, None)
     task = stuck_info['task']
@@ -826,8 +830,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_token_valid(context):
         try:
             await message.delete()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение со ссылкой: {e}")
         now = time.time()
         last = last_auth_warning.get(user_id, 0)
         if now - last > WARNING_COOLDOWN:
@@ -877,8 +881,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             await message.delete()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение: {e}")
         return WAITING_FOR_LINK
 
     async def safe_process():
@@ -893,7 +897,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Ошибка обработки: {e}", exc_info=True)
             try:
                 await context.bot.send_message(chat_id, f"❌ Ой-ой… Что-то пошло не так: {str(e)[:200]}")
-            except:
+            except Exception:
                 pass
         finally:
             user_processing.pop(user_id, None)
@@ -910,14 +914,14 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await message.delete()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение: {e}")
 
     async def delete_confirm():
         await asyncio.sleep(5)
         try:
             await confirm_msg.delete()
-        except:
+        except Exception:
             pass
     asyncio.create_task(delete_confirm())
 
@@ -1259,7 +1263,7 @@ async def worker_loop(app):
                         if prev:
                             try:
                                 await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                            except:
+                            except Exception:
                                 pass
 
                         tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -1367,7 +1371,7 @@ async def worker_loop(app):
                                     if prev:
                                         try:
                                             await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                                        except:
+                                        except Exception:
                                             pass
                                     msg = await app.bot.send_message(
                                         chat_id=chat_id,
@@ -1411,7 +1415,7 @@ async def worker_loop(app):
                                     if prev:
                                         try:
                                             await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                                        except:
+                                        except Exception:
                                             pass
                                     msg = await app.bot.send_message(
                                         chat_id=chat_id,
@@ -1462,7 +1466,7 @@ async def worker_loop(app):
                             if prev:
                                 try:
                                     await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                                except:
+                                except Exception:
                                     pass
                             msg = await app.bot.send_message(
                                 chat_id=chat_id,
@@ -1602,7 +1606,7 @@ async def worker_loop(app):
                                 if status_msg:
                                     try:
                                         await status_msg.edit_text(f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на облако...")
-                                    except:
+                                    except Exception:
                                         pass
                                 try:
                                     litterbox = LitterboxClient()
@@ -1610,7 +1614,7 @@ async def worker_loop(app):
                                     if url:
                                         await app.bot.send_message(chat_id=chat_id, text=f"🎁 {display_name} слишком велик для Telegram.\nВременная ссылка (24ч):\n{url}", disable_web_page_preview=True)
                                         uploaded = True
-                                except:
+                                except Exception:
                                     pass
                                 if not uploaded:
                                     try:
@@ -1619,7 +1623,7 @@ async def worker_loop(app):
                                         if url:
                                             await app.bot.send_message(chat_id=chat_id, text=f"🎁 {display_name} слишком велик для Telegram.\nПостоянная ссылка:\n{url}", disable_web_page_preview=True)
                                             uploaded = True
-                                    except:
+                                    except Exception:
                                         pass
                                 if not uploaded:
                                     await app.bot.send_message(chat_id=chat_id, text=f"❌ Не удалось загрузить {display_name}.")
@@ -1683,13 +1687,13 @@ async def worker_loop(app):
                                 try:
                                     await asyncio.sleep(1)
                                     await status_msg.delete()
-                                except:
+                                except Exception:
                                     pass
                             prev = chat_temp_msg.pop(chat_id, None)
                             if prev:
                                 try:
                                     await app.bot.delete_message(chat_id=chat_id, message_id=prev)
-                                except:
+                                except Exception:
                                     pass
 
                     except Exception as e:
@@ -1697,7 +1701,7 @@ async def worker_loop(app):
                         if status_msg:
                             try:
                                 await status_msg.edit_text(f"❌ Ошибка: {str(e)[:200]}")
-                            except:
+                            except Exception:
                                 await app.bot.send_message(chat_id=chat_id, text=f"❌ Ошибка: {str(e)[:200]}")
                         if "Forbidden" in str(e) or "Chat not found" in str(e):
                             add_pending_task(chat_id, task)
