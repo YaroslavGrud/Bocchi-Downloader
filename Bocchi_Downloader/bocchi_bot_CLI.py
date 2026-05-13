@@ -474,7 +474,6 @@ async def collect_tracks_from_links(links):
                     if owner_login in ('yamusic', 'yandex'):
                         cprint("⚠️ Служебный плейлист пропущен.", 'warn')
                         break
-                    playlist_title = pl.get('title', 'Неизвестный плейлист')
                     for item in pl.get('tracks', []):
                         tr = item.get('track')
                         if not tr:
