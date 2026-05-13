@@ -11,7 +11,6 @@ import os
 import random
 import re
 import shutil
-import signal
 import time
 import uuid
 from pathlib import Path
