@@ -132,7 +132,7 @@ def add_stats(bytes_added):
                 current = float(f.read())
         with open(STATS_FILE, "w") as f:
             f.write(str(current + bytes_added))
-    except:
+    except Exception:
         pass
 
 def get_formatted_stats():
