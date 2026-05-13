@@ -1649,8 +1649,8 @@ async def worker_loop(app):
                                     if url:
                                         await app.bot.send_message(chat_id=chat_id, text=f"🎁 {display_name} слишком велик для Telegram.\nВременная ссылка (24ч):\n{url}", disable_web_page_preview=True)
                                         uploaded = True
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.warning(f"Не удалось загрузить {display_name} в Litterbox: {e}")
                                 if not uploaded:
                                     try:
                                         catbox = AsyncCatboxClient()
@@ -1658,8 +1658,8 @@ async def worker_loop(app):
                                         if url:
                                             await app.bot.send_message(chat_id=chat_id, text=f"🎁 {display_name} слишком велик для Telegram.\nПостоянная ссылка:\n{url}", disable_web_page_preview=True)
                                             uploaded = True
-                                    except Exception:
-                                        pass
+                                    except Exception as e:
+                                        logger.warning(f"Не удалось загрузить {display_name} в Catbox: {e}")
                                 if not uploaded:
                                     await app.bot.send_message(chat_id=chat_id, text=f"❌ Не удалось загрузить {display_name}.")
                             else:
