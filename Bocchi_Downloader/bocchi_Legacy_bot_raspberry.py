@@ -16,7 +16,6 @@ import requests
 import urllib.parse
 from pathlib import Path
 
-import syncedlyrics  # не используется, но оставлен на случай
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, USLT, TDRC, TCON, TALB, APIC, TPE2
 from mutagen.mp3 import MP3
@@ -118,8 +117,8 @@ def add_stats(bytes_added):
             with open(STATS_FILE, "r") as f: current = float(f.read())
         with open(STATS_FILE, "w") as f:
             f.write(str(current + bytes_added))
-    except:
-        pass
+    except Exception as e:  # FIXED: замена голого except
+        logger.error(f"Не удалось обновить статистику: {e}")
 
 def get_formatted_stats():
     try:
@@ -130,7 +129,8 @@ def get_formatted_stats():
             if bytes_val < 1024.0: return f"{bytes_val:.2f} {unit}"
             bytes_val /= 1024.0
         return f"{bytes_val:.2f} ТБ"
-    except:
+    except (FileNotFoundError, ValueError, OSError) as e:  # FIXED: конкретные исключения + лог
+        logger.warning(f"Ошибка чтения статистики: {e}")
         return "0 Б"
 
 def get_v2raya_status():
@@ -147,8 +147,8 @@ def get_network_signal():
             if len(lines) > 2:
                 data = lines[2].split()
                 return f"{data[3].replace('.', '')} дБм (Lnk: {data[2].replace('.', '')}/70)"
-    except:
-        pass
+    except (FileNotFoundError, IndexError, ValueError) as e:  # FIXED: конкретные исключения + лог
+        logger.debug(f"Не удалось получить сигнал Wi-Fi: {e}")
     return "🔌 Ethernet"
 
 def get_ping():
@@ -326,7 +326,6 @@ async def worker(app: Application):
                             f"📦 Файл {display_name} весит {file_size_mb:.1f} МБ. Загружаю на временное облако...")
                         try:
                             litterbox = LitterboxClient()
-                            # upload_file — синхронный, оборачиваем в asyncio.to_thread
                             url = await asyncio.to_thread(
                                 litterbox.upload_file,
                                 str(f_path),
@@ -404,8 +403,8 @@ async def worker(app: Application):
 
                 try:
                     await status_msg.delete()
-                except:
-                    pass
+                except Exception as e:  # FIXED: логирование вместо pass
+                    logger.debug(f"Не удалось удалить сообщение-статус: {e}")
 
             except Exception as e:
                 logger.error(f"Worker Error: {e}")
@@ -481,8 +480,8 @@ async def save_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await update.message.delete()
-    except:
-        pass
+    except Exception as e:  # FIXED: логирование вместо pass
+        logger.debug(f"Не удалось удалить сообщение с токеном: {e}")
 
     status_msg = await update.message.reply_text("🔍 Заглядываю в твой токен...")
     try:
@@ -538,8 +537,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         await update.message.delete()
-    except:
-        pass
+    except Exception as e:  # FIXED: логирование вместо pass
+        logger.debug(f"Не удалось удалить сообщение со ссылками: {e}")
 
     return WAITING_FOR_LINK
 
@@ -789,8 +788,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             await status_msg.edit_text(full_text)
-        except Exception:
-            pass
+        except Exception as e:  # FIXED: добавил логирование (было просто pass)
+            logger.debug(f"Ошибка обновления статуса (итерация {i}): {e}")
+
         await asyncio.sleep(1)
 
     try:
