@@ -220,8 +220,11 @@ async def worker(app):
                     except asyncio.TimeoutError:
                         try:
                             proc.kill()
-                        except:
+                        except ProcessLookupError:
+                            # Процесс уже завершился к моменту попытки остановки.
                             pass
+                        except Exception as kill_error:
+                            logger.warning(f"Не удалось завершить зависший процесс загрузки: {kill_error}")
                         if attempt == max_retries - 1:
                             await app.bot.send_message(
                                 chat_id=task['chat_id'],
