@@ -27,7 +27,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          import yaml, subprocess, sys, os
+          import yaml
+          import subprocess
+          import sys
+          import os
 
           config_path = '.github/dependabot.yml'
           if not os.path.exists(config_path):
@@ -48,15 +51,16 @@ jobs:
 
           print(f"Labels to create: {labels}")
 
+          repo = os.environ['REPO']
           for label in labels:
               result = subprocess.run(
-                  ['gh', 'api', f'/repos/{REPO}/labels/{label}'],
+                  ['gh', 'api', f'/repos/{repo}/labels/{label}'],
                   capture_output=True, text=True
               )
               if result.returncode != 0:
                   print(f"Creating label: {label}")
                   subprocess.run(
-                      ['gh', 'api', f'/repos/{REPO}/labels',
+                      ['gh', 'api', f'/repos/{repo}/labels',
                        '-f', f'name={label}',
                        '-f', 'color=ededed',
                        '-f', 'description=Auto-created from Dependabot config'],
