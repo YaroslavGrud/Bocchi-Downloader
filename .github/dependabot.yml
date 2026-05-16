@@ -9,7 +9,9 @@ updates:
       python-packages:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-    labels: ["dependencies", "python"]
+    labels:
+      - "dependencies"
+      - "python"
     commit-message:
       prefix: "deps(pip)"
 
@@ -21,7 +23,9 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-    labels: ["dependencies", "github-actions"]
+    labels:
+      - "dependencies"
+      - "github-actions"
     commit-message:
       prefix: "deps(actions)"
 
@@ -33,6 +37,8 @@ updates:
     groups:
       docker:
         patterns: ["*"]
-    labels: ["dependencies", "docker"]
+    labels:
+      - "dependencies"
+      - "docker"
     commit-message:
       prefix: "deps(docker)"
