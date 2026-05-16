@@ -26,12 +26,19 @@ jobs:
 
       - run: pip install pyyaml
 
+      - name: Debug - List all YAML and Markdown files
+        run: |
+          echo "=== Listing all .yml and .yaml files ==="
+          find . -type f \( -name "*.yml" -o -name "*.yaml" \) | sort
+          echo "=== Listing all .md files ==="
+          find . -type f -name "*.md" | sort
+
       - name: Scan repository and create missing labels
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          import os, re, yaml, subprocess, sys
+          import os, re, yaml, subprocess, sys, glob
 
           # ------------------------------------------------------------
           # Настройте описания и цвета для конкретных ярлыков
@@ -64,8 +71,9 @@ jobs:
               try:
                   data = yaml.safe_load(content)
                   if not data:
+                      print(f"  ⚠️ Empty or invalid YAML in {source}")
                       return labels
-                  def walk(obj):
+                  def walk(obj, path=""):
                       if isinstance(obj, dict):
                           if 'labels' in obj:
                               vals = obj['labels']
@@ -73,14 +81,14 @@ jobs:
                                   for v in vals:
                                       if isinstance(v, str) and not is_badge(v):
                                           labels.add(v.strip())
-                          for v in obj.values():
-                              walk(v)
+                          for k, v in obj.items():
+                              walk(v, f"{path}.{k}")
                       elif isinstance(obj, list):
-                          for v in obj:
-                              walk(v)
+                          for i, v in enumerate(obj):
+                              walk(v, f"{path}[{i}]")
                   walk(data)
-              except yaml.YAMLError:
-                  print(f"  ⚠️ YAML parse error in {source}")
+              except yaml.YAMLError as e:
+                  print(f"  ❌ YAML parse error in {source}: {e}")
               return labels
 
           def extract_labels_from_md(content: str, source: str):
@@ -94,34 +102,48 @@ jobs:
           all_labels = set()
           files_processed = 0
 
-          for root, dirs, files in os.walk('.'):
-              if '.git' in root:
+          # Use glob for more reliable file discovery
+          yaml_files = glob.glob('**/*.yml', recursive=True) + glob.glob('**/*.yaml', recursive=True)
+          md_files = glob.glob('**/*.md', recursive=True)
+          
+          print(f"Found {len(yaml_files)} YAML files and {len(md_files)} Markdown files.")
+          
+          # Process YAML files
+          for filepath in yaml_files:
+              if '.git' in filepath.split(os.sep):
                   continue
-              for file in files:
-                  if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2')):
-                      continue
-                  filepath = os.path.join(root, file)
-                  try:
-                      with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                          content = f.read()
-                  except Exception:
-                      continue
-
-                  found_here = set()
-                  if file.endswith(('.yml', '.yaml')):
-                      found_here = extract_labels_from_yaml(content, filepath)
-                      if found_here:
-                          print(f"📄 {filepath} -> {found_here}")
-                  elif file.endswith('.md'):
-                      if file.lower() in ['readme.md', 'readme_ru.md', 'changelog.md']:
-                          continue
-                      found_here = extract_labels_from_md(content, filepath)
-                      if found_here:
-                          print(f"📄 {filepath} -> {found_here}")
-
+              try:
+                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                      content = f.read()
+                  found_here = extract_labels_from_yaml(content, filepath)
                   if found_here:
+                      print(f"📄 {filepath} -> {found_here}")
                       all_labels.update(found_here)
                       files_processed += 1
+                  else:
+                      # Only print for .github/ files to reduce noise
+                      if '.github' in filepath:
+                          print(f"🔍 {filepath}: No labels found (but file exists)")
+              except Exception as e:
+                  print(f"❌ Error reading {filepath}: {e}")
+
+          # Process Markdown files (excluding README etc.)
+          for filepath in md_files:
+              if '.git' in filepath.split(os.sep):
+                  continue
+              filename = os.path.basename(filepath).lower()
+              if filename in ['readme.md', 'readme_ru.md', 'changelog.md']:
+                  continue
+              try:
+                  with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                      content = f.read()
+                  found_here = extract_labels_from_md(content, filepath)
+                  if found_here:
+                      print(f"📄 {filepath} -> {found_here}")
+                      all_labels.update(found_here)
+                      files_processed += 1
+              except Exception as e:
+                  print(f"❌ Error reading {filepath}: {e}")
 
           if not all_labels:
               print("❌ No labels found in any YAML/Markdown file.")
