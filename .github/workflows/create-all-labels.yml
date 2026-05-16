@@ -1,0 +1,135 @@
+name: Scan repo and create missing labels
+
+on:
+  workflow_dispatch:          # можно запустить вручную
+  push:
+    paths:
+      - '.github/**'          # следит за изменениями в конфигурации
+      - 'dependabot.yml'
+
+permissions:
+  contents: read
+  issues: write               # для создания ярлыков
+
+jobs:
+  create-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Scan and create missing labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          import os, re, yaml, subprocess, json
+
+          # Функция для проверки, не является ли строка частью бейджа
+          def is_badge(text):
+              # Исключаем строки, содержащие типичные признаки shields.io-бейджей
+              badge_patterns = [
+                  r'shields\.io',
+                  r'img\.shields\.io',
+                  r'badge',
+                  r'\.svg',
+                  r'http',          # если внутри ссылки, скорее всего бейдж
+              ]
+              return any(re.search(p, text, re.IGNORECASE) for p in badge_patterns)
+
+          # Извлекаем названия ярлыков из YAML/фронтматтера
+          def extract_labels_from_yaml(content):
+              labels = set()
+              try:
+                  data = yaml.safe_load(content)
+                  if not data:
+                      return labels
+                  # Ищем ключ 'labels' на любом уровне вложенности
+                  def walk(obj):
+                      if isinstance(obj, dict):
+                          if 'labels' in obj:
+                              vals = obj['labels']
+                              if isinstance(vals, list):
+                                  for v in vals:
+                                      if isinstance(v, str) and not is_badge(v):
+                                          labels.add(v.strip())
+                          for v in obj.values():
+                              walk(v)
+                      elif isinstance(obj, list):
+                          for v in obj:
+                              walk(v)
+                  walk(data)
+              except yaml.YAMLError:
+                  pass
+              return labels
+
+          # Извлекаем ярлыки из markdown-фронтматтера (если есть)
+          def extract_labels_from_md(content):
+              labels = set()
+              # Ищем между --- и ---
+              match = re.match(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+              if match:
+                  yaml_part = match.group(1)
+                  labels = extract_labels_from_yaml(yaml_part)
+              return labels
+
+          all_labels = set()
+
+          # Проходим по всем файлам репозитория (исключая .git)
+          for root, dirs, files in os.walk('.'):
+              if '.git' in root:
+                  continue
+              for file in files:
+                  filepath = os.path.join(root, file)
+                  # Игнорируем изображения, шрифты и т.п.
+                  if file.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico')):
+                      continue
+                  try:
+                      with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                          content = f.read()
+                  except Exception:
+                      continue
+
+                  # Обработка YAML-файлов
+                  if file.endswith(('.yml', '.yaml')):
+                      all_labels.update(extract_labels_from_yaml(content))
+                  # Обработка Markdown (может содержать фронтматтер с labels)
+                  elif file.endswith('.md'):
+                      # Игнорируем README и подобные, где бейджи наиболее вероятны
+                      if file.lower() in ['readme.md', 'readme_ru.md', 'changelog.md']:
+                          continue
+                      all_labels.update(extract_labels_from_md(content))
+
+          print(f"Found labels in repository: {all_labels}")
+
+          if not all_labels:
+              print("No labels found. Exiting.")
+              exit(0)
+
+          # Создаём отсутствующие ярлыки
+          for label in all_labels:
+              result = subprocess.run(
+                  ['gh', 'api', f'/repos/{REPO}/labels/{label}'],
+                  capture_output=True, text=True
+              )
+              if result.returncode != 0:
+                  print(f"Creating label: {label}")
+                  subprocess.run(
+                      ['gh', 'api', f'/repos/{REPO}/labels',
+                       '-f', f'name={label}',
+                       '-f', 'color=ededed',
+                       '-f', 'description=Auto-created label'],
+                      check=True
+                  )
+              else:
+                  print(f"Label already exists: {label}")
+          print("All done!")
+        shell: python
