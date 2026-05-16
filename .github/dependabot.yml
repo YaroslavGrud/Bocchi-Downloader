@@ -13,22 +13,6 @@ updates:
     commit-message:
       prefix: "deps(pip)"
 
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "daily"
-    open-pull-requests-limit: 10
-    groups:
-      npm-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-      npm-major:
-        patterns: ["*"]
-        update-types: ["major"]
-    labels: ["dependencies", "javascript"]
-    commit-message:
-      prefix: "deps(npm)"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
