@@ -1,10 +1,14 @@
-name: Create missing Dependabot labels
+name: Create missing labels from whole repo
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - '.github/dependabot.yml'
+      - '.github/**'
+      - 'dependabot.yml'
+      - '**.yml'
+      - '**.yaml'
+      - '**.md'
 
 permissions:
   contents: read
@@ -22,51 +26,138 @@ jobs:
 
       - run: pip install pyyaml
 
-      - name: Create missing labels from dependabot.yml
+      - name: Scan repository and create missing labels
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
+          import os
+          import re
           import yaml
           import subprocess
           import sys
-          import os
 
-          config_path = '.github/dependabot.yml'
-          if not os.path.exists(config_path):
-              print(f"File {config_path} not found. Exiting.")
+          # ------------------------------------------------------------
+          # Настройте описания и цвета для конкретных ярлыков
+          # Если ярлык не указан здесь, будет использован цвет "ededed"
+          # и описание "Auto-created label"
+          LABEL_INFO = {
+              "dependencies": {
+                  "color": "ededed",
+                  "description": "Pull requests that update a dependency file"
+              },
+              "python": {
+                  "color": "2b67c6",
+                  "description": "Pull requests that update Python packages"
+              },
+              "github-actions": {
+                  "color": "00008b",
+                  "description": "Pull requests that update GitHub Actions workflows"
+              },
+              "docker": {
+                  "color": "384d54",
+                  "description": "Pull requests that update Docker images or Dockerfiles"
+              }
+          }
+          # ------------------------------------------------------------
+
+          # Проверка, не похожа ли строка на shields.io бейдж
+          def is_badge(text: str) -> bool:
+              patterns = [
+                  r'shields\.io',
+                  r'img\.shields\.io',
+                  r'badge',
+                  r'\.svg',
+                  r'http',   # ссылки почти всегда ведут на бейджи
+              ]
+              return any(re.search(p, text, re.IGNORECASE) for p in patterns)
+
+          # Извлечение ярлыков из YAML-содержимого
+          def extract_labels_from_yaml(content: str):
+              labels = set()
+              try:
+                  data = yaml.safe_load(content)
+                  if not data:
+                      return labels
+
+                  def walk(obj):
+                      if isinstance(obj, dict):
+                          if 'labels' in obj:
+                              vals = obj['labels']
+                              if isinstance(vals, list):
+                                  for v in vals:
+                                      if isinstance(v, str) and not is_badge(v):
+                                          labels.add(v.strip())
+                          for v in obj.values():
+                              walk(v)
+                      elif isinstance(obj, list):
+                          for v in obj:
+                              walk(v)
+                  walk(data)
+              except yaml.YAMLError:
+                  pass
+              return labels
+
+          # Извлечение ярлыков из Markdown (только frontmatter)
+          def extract_labels_from_md(content: str):
+              labels = set()
+              match = re.match(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+              if match:
+                  yaml_part = match.group(1)
+                  labels = extract_labels_from_yaml(yaml_part)
+              return labels
+
+          # Сбор всех ярлыков
+          all_labels = set()
+
+          for root, dirs, files in os.walk('.'):
+              if '.git' in root:
+                  continue
+              for file in files:
+                  # Пропускаем изображения и шрифты
+                  if file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2')):
+                      continue
+
+                  filepath = os.path.join(root, file)
+                  try:
+                      with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                          content = f.read()
+                  except Exception:
+                      continue
+
+                  # Обрабатываем YAML-файлы
+                  if file.endswith(('.yml', '.yaml')):
+                      all_labels.update(extract_labels_from_yaml(content))
+                  # Обрабатываем Markdown, кроме тех, где много бейджей
+                  elif file.endswith('.md'):
+                      if file.lower() in ['readme.md', 'readme_ru.md', 'changelog.md']:
+                          continue
+                      all_labels.update(extract_labels_from_md(content))
+
+          if not all_labels:
+              print("No labels found in repository. Exiting.")
               sys.exit(0)
 
-          with open(config_path, 'r') as f:
-              config = yaml.safe_load(f)
-
-          labels = set()
-          for update in config.get('updates', []):
-              for label in update.get('labels', []):
-                  labels.add(label.strip())
-
-          if not labels:
-              print("No labels found in dependabot.yml")
-              sys.exit(0)
-
-          print(f"Labels to create: {labels}")
+          print(f"Found labels: {all_labels}")
 
           repo = os.environ['REPO']
-          for label in labels:
+          for label in all_labels:
               result = subprocess.run(
                   ['gh', 'api', f'/repos/{repo}/labels/{label}'],
                   capture_output=True, text=True
               )
               if result.returncode != 0:
-                  print(f"Creating label: {label}")
+                  info = LABEL_INFO.get(label, {"color": "ededed", "description": "Auto-created label"})
+                  print(f"Creating label: {label} (color: {info['color']}, desc: {info['description']})")
                   subprocess.run(
                       ['gh', 'api', f'/repos/{repo}/labels',
                        '-f', f'name={label}',
-                       '-f', 'color=ededed',
-                       '-f', 'description=Auto-created from Dependabot config'],
+                       '-f', f'color={info["color"]}',
+                       '-f', f'description={info["description"]}'],
                       check=True
                   )
               else:
                   print(f"Label already exists: {label}")
-          print("Done!")
+
+          print("All done!")
         shell: python
