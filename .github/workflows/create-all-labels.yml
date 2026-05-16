@@ -27,19 +27,31 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml
 
-      - name: Find and create labels
+      - name: Find and create/update labels
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           python - <<'EOF'
-          import os, re, yaml, subprocess, sys
+          import os, re, yaml, subprocess, sys, json
 
           LABEL_INFO = {
-              "dependencies": {"color": "ededed", "description": "Pull requests that update a dependency file"},
-              "python": {"color": "2b67c6", "description": "Pull requests that update Python packages"},
-              "github-actions": {"color": "00008b", "description": "Pull requests that update GitHub Actions workflows"},
-              "docker": {"color": "384d54", "description": "Pull requests that update Docker images or Dockerfiles"}
+              "dependencies": {
+                  "color": "ededed",
+                  "description": "Pull requests that update project dependencies (pip, GitHub Actions, Docker, etc.)"
+              },
+              "python": {
+                  "color": "2b67c6",
+                  "description": "Pull requests that update Python packages or Python-related dependencies"
+              },
+              "github-actions": {
+                  "color": "00008b",
+                  "description": "Pull requests that update GitHub Actions workflows and actions"
+              },
+              "docker": {
+                  "color": "384d54",
+                  "description": "Pull requests that update Docker images, Dockerfiles, or container-related configurations"
+              }
           }
 
           def is_badge(text):
@@ -128,8 +140,10 @@ jobs:
 
           repo = os.environ['REPO']
           for label in sorted(all_labels):
+              # Проверяем, существует ли метка
               result = subprocess.run(['gh', 'api', f'/repos/{repo}/labels/{label}'], capture_output=True, text=True)
               if result.returncode != 0:
+                  # Создаём новую метку
                   info = LABEL_INFO.get(label, {"color": "ededed", "description": "Auto-created label"})
                   print(f"✨ Creating label: {label} (color: {info['color']}, desc: {info['description']})")
                   subprocess.run(['gh', 'api', f'/repos/{repo}/labels',
@@ -137,7 +151,16 @@ jobs:
                                   '-f', f'color={info["color"]}',
                                   '-f', f'description={info["description"]}'], check=True)
               else:
-                  print(f"✔️ Label already exists: {label}")
+                  # Метка существует — обновляем описание, если нужно
+                  existing = json.loads(result.stdout)
+                  info = LABEL_INFO.get(label, {})
+                  needed_desc = info.get('description', '')
+                  if needed_desc and existing.get('description') != needed_desc:
+                      print(f"🔄 Updating description for {label}: '{existing.get('description')}' -> '{needed_desc}'")
+                      subprocess.run(['gh', 'api', '-X', 'PATCH', f'/repos/{repo}/labels/{label}',
+                                      '-f', f'description={needed_desc}'], check=True)
+                  else:
+                      print(f"✔️ Label already exists and description is correct: {label}")
 
           print("\n🎉 All done!")
           EOF
