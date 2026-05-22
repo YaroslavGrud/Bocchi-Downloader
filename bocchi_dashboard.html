@@ -244,8 +244,8 @@
             </div>
             <div class="chart-container">
                 <div class="custom-legend">
-                    <div class="legend-item"><span class="legend-color" style="background:#6bc5ff;"></span> Входящий <span id="rxLegendUnit"></span></div>
-                    <div class="legend-item"><span class="legend-color" style="background:#F5A0C5;"></span> Исходящий <span id="txLegendUnit"></span></div>
+                    <div class="legend-item"><span class="legend-color" style="background:#6bc5ff;"></span> Входящий</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#F5A0C5;"></span> Исходящий</div>
                 </div>
                 <canvas id="netChart"></canvas>
                 <div class="update-time" id="netUpdateTime">Обновлено: --:--:--</div>
@@ -273,48 +273,41 @@
     let prevRx = null, prevTx = null, lastNetFetchTime = 0;
     let cpuChart, ramChart, netChart;
     let animationTimers = {};
+    let systemRamTotalMB = 1000; // значение по умолчанию до получения реального
 
     // ====== localStorage ======
     function saveHistory() {
         const data = { timeLabels, cpuHistory, ramHistory, rxHistory, txHistory };
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        } catch (e) {
-            console.warn('localStorage переполнен, очищаем старые данные');
-            localStorage.removeItem(STORAGE_KEY);
-        }
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+        catch (e) { console.warn('localStorage переполнен'); localStorage.removeItem(STORAGE_KEY); }
     }
 
     function loadHistory() {
         try {
             const saved = localStorage.getItem(STORAGE_KEY);
-            if (saved) {
-                const data = JSON.parse(saved);
-                if (data.timeLabels && Array.isArray(data.timeLabels) &&
-                    data.cpuHistory && Array.isArray(data.cpuHistory) &&
-                    data.ramHistory && Array.isArray(data.ramHistory) &&
-                    data.rxHistory && Array.isArray(data.rxHistory) &&
-                    data.txHistory && Array.isArray(data.txHistory)) {
-                    while (data.timeLabels.length > MAX_POINTS) {
-                        data.timeLabels.shift();
-                        data.cpuHistory.shift();
-                        data.ramHistory.shift();
-                        data.rxHistory.shift();
-                        data.txHistory.shift();
-                    }
-                    timeLabels = data.timeLabels;
-                    cpuHistory = data.cpuHistory;
-                    ramHistory = data.ramHistory;
-                    rxHistory = data.rxHistory;
-                    txHistory = data.txHistory;
-                    return true;
+            if (!saved) return false;
+            const data = JSON.parse(saved);
+            if (data.timeLabels && Array.isArray(data.timeLabels) &&
+                data.cpuHistory && Array.isArray(data.cpuHistory) &&
+                data.ramHistory && Array.isArray(data.ramHistory) &&
+                data.rxHistory && Array.isArray(data.rxHistory) &&
+                data.txHistory && Array.isArray(data.txHistory)) {
+                while (data.timeLabels.length > MAX_POINTS) {
+                    data.timeLabels.shift(); data.cpuHistory.shift();
+                    data.ramHistory.shift(); data.rxHistory.shift(); data.txHistory.shift();
                 }
+                timeLabels = data.timeLabels;
+                cpuHistory = data.cpuHistory;
+                ramHistory = data.ramHistory; // уже в MB
+                rxHistory = data.rxHistory;
+                txHistory = data.txHistory;
+                return true;
             }
-        } catch (e) { console.warn('Ошибка загрузки истории', e); }
+        } catch (e) { console.warn('Ошибка загрузки истории'); }
         return false;
     }
 
-    // ====== Форматирование байт ======
+    // ====== Форматирование ======
     function formatBytes(bytes) {
         if (bytes === undefined || bytes === null) return { value: 0, unit: 'B' };
         if (bytes < 1024) return { value: bytes, unit: 'B' };
@@ -380,7 +373,6 @@
         const decimals = (bytesPerSec < 1024) ? 0 : (fmt.unit === 'MB/s' ? 1 : (fmt.unit === 'KB/s' ? 1 : 0));
         animateNetNumber(speedElem, fmt.value, decimals);
         unitElem.innerText = fmt.unit;
-        return fmt.unit; // возвращаем единицу для обновления легенды
     }
 
     // ====== Диск ======
@@ -459,6 +451,7 @@
 
     // ====== Авто-юниты для оси Y ======
     function formatRamTick(value) {
+        // value – это МБ
         if (value >= 1048576) return (value / 1048576).toFixed(1) + ' TB';
         if (value >= 1024)    return (value / 1024).toFixed(1) + ' GB';
         return value.toFixed(0) + ' MB';
@@ -471,6 +464,19 @@
         return value.toFixed(0) + ' B/s';
     }
 
+    // Красивое округление максимума сети
+    function niceMax(value) {
+        if (value <= 0) return 10; // минимум 10 KB/s
+        const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+        const residual = value / magnitude;
+        let nice;
+        if (residual <= 1) nice = 1;
+        else if (residual <= 2) nice = 2;
+        else if (residual <= 5) nice = 5;
+        else nice = 10;
+        return nice * magnitude;
+    }
+
     // ====== Обновление графиков ======
     function updateCharts() {
         const currentTime = getCurrentTimeLabel();
@@ -479,21 +485,18 @@
         if (cpuChart) {
             cpuChart.data.labels = [...timeLabels];
             cpuChart.data.datasets[0].data = [...cpuHistory];
-            let maxCpu = Math.max(...cpuHistory, 0);
-            maxCpu = Math.max(maxCpu * 1.1, 5);
-            cpuChart.options.scales.y.max = maxCpu;
-            cpuChart.options.scales.y.ticks.callback = (v) => v.toFixed(1) + '%';
+            const maxCpu = Math.max(...cpuHistory, 100);
+            cpuChart.options.scales.y.max = (maxCpu > 100) ? maxCpu * 1.1 : 100;
+            cpuChart.options.scales.y.ticks.callback = (v) => v.toFixed(0) + '%';
             cpuChart.update('none');
             document.getElementById('cpuUpdateTime').innerText = `Обновлено: ${currentTime}`;
         }
 
         // RAM
-        if (ramChart) {
+        if (ramChart && systemRamTotalMB) {
             ramChart.data.labels = [...timeLabels];
-            ramChart.data.datasets[0].data = [...ramHistory];
-            let maxRam = Math.max(...ramHistory, 0);
-            maxRam = Math.max(maxRam * 1.1, 10);
-            ramChart.options.scales.y.max = maxRam;
+            ramChart.data.datasets[0].data = [...ramHistory]; // MB
+            ramChart.options.scales.y.max = systemRamTotalMB; // фиксированная шкала до общего объема
             ramChart.options.scales.y.ticks.callback = formatRamTick;
             ramChart.update('none');
             document.getElementById('ramUpdateTime').innerText = `Обновлено: ${currentTime}`;
@@ -504,37 +507,140 @@
             netChart.data.labels = [...timeLabels];
             netChart.data.datasets[0].data = [...rxHistory];
             netChart.data.datasets[1].data = [...txHistory];
-            let maxNet = Math.max(...rxHistory, ...txHistory, 0);
-            maxNet = Math.max(maxNet * 1.1, 1);
-            netChart.options.scales.y.max = maxNet;
+            const maxNet = Math.max(...rxHistory, ...txHistory, 0);
+            const rawMax = maxNet * 1.1;
+            netChart.options.scales.y.max = niceMax(rawMax);
             netChart.options.scales.y.ticks.callback = formatNetTick;
             netChart.update('none');
             document.getElementById('netUpdateTime').innerText = `Обновлено: ${currentTime}`;
         }
     }
 
-    // ====== Инициализация графиков ======
+    // ====== Инициализация графиков с заполнением ======
     function initCharts() {
         const cpuCtx = document.getElementById('cpuChart').getContext('2d');
         cpuChart = new Chart(cpuCtx, {
-            type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#F5A0C5', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#F5A0C5', pointStyle: 'circle' }] },
-            options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxTicksLimit: 8 } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } }
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    borderColor: '#F5A0C5',
+                    borderWidth: 2,
+                    tension: 0.2,
+                    fill: true,
+                    backgroundColor: 'rgba(245, 160, 197, 0.1)',
+                    pointRadius: 2,
+                    pointBackgroundColor: '#F5A0C5',
+                    pointStyle: 'circle'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: {
+                        min: 0,
+                        max: 100,
+                        grid: { color: '#2a2a36' },
+                        ticks: { color: '#aaa', maxTicksLimit: 8, callback: (v) => v + '%' }
+                    },
+                    x: {
+                        grid: { color: '#2a2a36' },
+                        ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 }
+                    }
+                }
+            }
         });
 
         const ramCtx = document.getElementById('ramChart').getContext('2d');
         ramChart = new Chart(ramCtx, {
-            type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#FFB347', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#FFB347', pointStyle: 'circle' }] },
-            options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 1000, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', callback: formatRamTick, maxTicksLimit: 8 } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } }
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    borderColor: '#FFB347',
+                    borderWidth: 2,
+                    tension: 0.2,
+                    fill: true,
+                    backgroundColor: 'rgba(255, 179, 71, 0.1)',
+                    pointRadius: 2,
+                    pointBackgroundColor: '#FFB347',
+                    pointStyle: 'circle'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: {
+                        min: 0,
+                        max: systemRamTotalMB, // обновляется при получении реальных данных
+                        grid: { color: '#2a2a36' },
+                        ticks: { color: '#aaa', callback: formatRamTick, maxTicksLimit: 8 }
+                    },
+                    x: {
+                        grid: { color: '#2a2a36' },
+                        ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 }
+                    }
+                }
+            }
         });
 
         const netCtx = document.getElementById('netChart').getContext('2d');
         netChart = new Chart(netCtx, {
-            type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#6bc5ff', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#6bc5ff', pointStyle: 'circle' }, { label: '', data: [], borderColor: '#F5A0C5', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#F5A0C5', pointStyle: 'circle' }] },
-            options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', callback: formatNetTick, maxTicksLimit: 8 } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } }
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        data: [],
+                        borderColor: '#6bc5ff',
+                        borderWidth: 2,
+                        tension: 0.2,
+                        fill: true,
+                        backgroundColor: 'rgba(107, 197, 255, 0.1)',
+                        pointRadius: 2,
+                        pointBackgroundColor: '#6bc5ff',
+                        pointStyle: 'circle'
+                    },
+                    {
+                        data: [],
+                        borderColor: '#F5A0C5',
+                        borderWidth: 2,
+                        tension: 0.2,
+                        fill: true,
+                        backgroundColor: 'rgba(245, 160, 197, 0.1)',
+                        pointRadius: 2,
+                        pointBackgroundColor: '#F5A0C5',
+                        pointStyle: 'circle'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: {
+                        min: 0,
+                        max: 100,
+                        grid: { color: '#2a2a36' },
+                        ticks: { color: '#aaa', callback: formatNetTick, maxTicksLimit: 8 }
+                    },
+                    x: {
+                        grid: { color: '#2a2a36' },
+                        ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 }
+                    }
+                }
+            }
         });
     }
 
-    // ====== Запросы к API ======
+    // ====== API-запросы ======
     async function fetchCPU() {
         try {
             const resp = await fetch(`${API_BASE}/4/cpu`);
@@ -551,7 +657,8 @@
         try {
             const resp = await fetch(`${API_BASE}/4/load`);
             const data = await resp.json();
-            document.getElementById('loadAvg').innerText = `${data.min1?.toFixed(2)||0} / ${data.min5?.toFixed(2)||0} / ${data.min15?.toFixed(2)||0}`;
+            document.getElementById('loadAvg').innerText =
+                `${data.min1?.toFixed(2)||0} / ${data.min5?.toFixed(2)||0} / ${data.min15?.toFixed(2)||0}`;
         } catch(e) { console.error(e); }
     }
 
@@ -562,14 +669,21 @@
             const totalBytes = data.total;
             const usedBytes = data.used;
             const freeBytes = data.free + data.cached;
+
+            systemRamTotalMB = totalBytes / (1024 * 1024); // переводим в МБ
+
             const totalFmt = formatBytes(totalBytes);
             const usedFmt = formatBytes(usedBytes);
             const freeFmt = formatBytes(freeBytes);
+
             animateNumber(document.getElementById('ramUsed'), usedFmt.value, ' ' + usedFmt.unit, usedFmt.unit === 'GB' ? 2 : 0);
             animateNumber(document.getElementById('ramFree'), freeFmt.value, ' ' + freeFmt.unit, freeFmt.unit === 'GB' ? 2 : 0);
             animateNumber(document.getElementById('ramTotal'), totalFmt.value, ' ' + totalFmt.unit, totalFmt.unit === 'GB' ? 2 : 0);
-            document.getElementById('ramFill').style.width = (usedBytes / totalBytes * 100) + '%';
-            return usedBytes / (1024*1024);
+
+            const percent = (usedBytes / totalBytes) * 100;
+            document.getElementById('ramFill').style.width = percent + '%';
+
+            return usedBytes / (1024 * 1024); // МБ
         } catch(e) { console.error(e); return 0; }
     }
 
@@ -596,33 +710,20 @@
                 if (prevRx !== null && prevTx !== null && lastNetFetchTime !== 0) {
                     let dt = (nowTime - lastNetFetchTime) / 1000;
                     if (dt > 0) {
-                        let rx = (nowRx - prevRx) / dt, tx = (nowTx - prevTx) / dt;
+                        let rx = (nowRx - prevRx) / dt;
+                        let tx = (nowTx - prevTx) / dt;
                         if (rx < 0) rx = 0; if (tx < 0) tx = 0;
                         if (rx > 1e9) rx = 1e9; if (tx > 1e9) tx = 1e9;
-                        const rxUnit = updateNetSpeed(document.getElementById('rxSpeed'), document.getElementById('rxUnit'), rx);
-                        const txUnit = updateNetSpeed(document.getElementById('txSpeed'), document.getElementById('txUnit'), tx);
-                        // Обновляем единицы в легенде
-                        document.getElementById('rxLegendUnit').innerText = rxUnit ? ` (${rxUnit})` : '';
-                        document.getElementById('txLegendUnit').innerText = txUnit ? ` (${txUnit})` : '';
+                        updateNetSpeed(document.getElementById('rxSpeed'), document.getElementById('rxUnit'), rx);
+                        updateNetSpeed(document.getElementById('txSpeed'), document.getElementById('txUnit'), tx);
                         prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime;
-                        return { rx: rx / 1024, tx: tx / 1024 };
+                        return { rx: rx / 1024, tx: tx / 1024 }; // KB/s
                     }
                 }
                 prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime;
-                document.getElementById('rxLegendUnit').innerText = '';
-                document.getElementById('txLegendUnit').innerText = '';
                 return { rx: 0, tx: 0 };
-            } else {
-                document.getElementById('rxLegendUnit').innerText = '';
-                document.getElementById('txLegendUnit').innerText = '';
-                return { rx: 0, tx: 0 };
-            }
-        } catch(e) {
-            console.error('Network error', e);
-            document.getElementById('rxLegendUnit').innerText = '';
-            document.getElementById('txLegendUnit').innerText = '';
-            return { rx: 0, tx: 0 };
-        }
+            } else { return { rx: 0, tx: 0 }; }
+        } catch(e) { console.error('Network error', e); return { rx: 0, tx: 0 }; }
     }
 
     async function fetchSystem() {
@@ -681,12 +782,13 @@
     async function refreshData() {
         const cpu = await fetchCPU();
         await fetchLoad();
-        const ramMB = await fetchMemory();
+        const ramMB = await fetchMemory(); // МБ
         await fetchDisks();
         const net = await fetchNetwork();
         await fetchSystem();
         await fetchUptime();
         await fetchContainers();
+
         addDataPoint(cpu, ramMB, net.rx, net.tx);
         updateCharts();
         saveHistory();
