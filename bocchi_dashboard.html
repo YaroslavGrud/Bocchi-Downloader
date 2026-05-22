@@ -67,27 +67,17 @@
             background-color: #2ecc71;
             animation: pulse 1.4s ease-in-out infinite;
         }
-        /* noinspection CssUnusedSymbol */
         .led-red {
             background-color: #e74c3c;
             animation: none;
         }
-        .status-text-green {
-            color: #2ecc71;
-            font-weight: 500;
-        }
-        /* noinspection CssUnusedSymbol */
-        .status-text-red {
-            color: #e74c3c;
-            font-weight: 500;
-        }
-
+        .status-text-green { color: #2ecc71; font-weight: 500; }
+        .status-text-red   { color: #e74c3c; font-weight: 500; }
         @keyframes pulse {
             0% { opacity: 0.3; transform: scale(0.8); }
             50% { opacity: 1; transform: scale(1); }
             100% { opacity: 0.3; transform: scale(0.8); }
         }
-
         .system-info-bar {
             background: rgba(30, 30, 42, 0.7);
             border-radius: 24px;
@@ -240,7 +230,7 @@
             <div class="metric-row"><span class="metric-label">Свободно</span><span class="metric-value" id="ramFree">0 MB</span></div>
             <div class="metric-row"><span class="metric-label">Всего</span><span class="metric-value" id="ramTotal">0 MB</span></div>
             <div class="chart-container">
-                <div class="custom-legend"><div class="legend-item"><span class="legend-color" style="background:#FFB347;"></span> Использование, MB</div></div>
+                <div class="custom-legend"><div class="legend-item"><span class="legend-color" style="background:#FFB347;"></span> Использовано</div></div>
                 <canvas id="ramChart"></canvas>
                 <div class="update-time" id="ramUpdateTime">Обновлено: --:--:--</div>
             </div>
@@ -254,8 +244,8 @@
             </div>
             <div class="chart-container">
                 <div class="custom-legend">
-                    <div class="legend-item"><span class="legend-color" style="background:#6bc5ff;"></span> Входящий, KB/s</div>
-                    <div class="legend-item"><span class="legend-color" style="background:#F5A0C5;"></span> Исходящий, KB/s</div>
+                    <div class="legend-item"><span class="legend-color" style="background:#6bc5ff;"></span> Входящий <span id="rxLegendUnit"></span></div>
+                    <div class="legend-item"><span class="legend-color" style="background:#F5A0C5;"></span> Исходящий <span id="txLegendUnit"></span></div>
                 </div>
                 <canvas id="netChart"></canvas>
                 <div class="update-time" id="netUpdateTime">Обновлено: --:--:--</div>
@@ -277,11 +267,54 @@
     /* global Chart */
     const API_BASE = '/api';
     const MAX_POINTS = 20;
+    const STORAGE_KEY = 'bocchi_history';
+
     let timeLabels = [], cpuHistory = [], ramHistory = [], rxHistory = [], txHistory = [];
     let prevRx = null, prevTx = null, lastNetFetchTime = 0;
     let cpuChart, ramChart, netChart;
     let animationTimers = {};
 
+    // ====== localStorage ======
+    function saveHistory() {
+        const data = { timeLabels, cpuHistory, ramHistory, rxHistory, txHistory };
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        } catch (e) {
+            console.warn('localStorage переполнен, очищаем старые данные');
+            localStorage.removeItem(STORAGE_KEY);
+        }
+    }
+
+    function loadHistory() {
+        try {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+                const data = JSON.parse(saved);
+                if (data.timeLabels && Array.isArray(data.timeLabels) &&
+                    data.cpuHistory && Array.isArray(data.cpuHistory) &&
+                    data.ramHistory && Array.isArray(data.ramHistory) &&
+                    data.rxHistory && Array.isArray(data.rxHistory) &&
+                    data.txHistory && Array.isArray(data.txHistory)) {
+                    while (data.timeLabels.length > MAX_POINTS) {
+                        data.timeLabels.shift();
+                        data.cpuHistory.shift();
+                        data.ramHistory.shift();
+                        data.rxHistory.shift();
+                        data.txHistory.shift();
+                    }
+                    timeLabels = data.timeLabels;
+                    cpuHistory = data.cpuHistory;
+                    ramHistory = data.ramHistory;
+                    rxHistory = data.rxHistory;
+                    txHistory = data.txHistory;
+                    return true;
+                }
+            }
+        } catch (e) { console.warn('Ошибка загрузки истории', e); }
+        return false;
+    }
+
+    // ====== Форматирование байт ======
     function formatBytes(bytes) {
         if (bytes === undefined || bytes === null) return { value: 0, unit: 'B' };
         if (bytes < 1024) return { value: bytes, unit: 'B' };
@@ -293,20 +326,19 @@
     function formatSpeed(bytesPerSec) {
         if (bytesPerSec < 1024) return { value: bytesPerSec, unit: 'B/s' };
         if (bytesPerSec < 1024*1024) return { value: bytesPerSec / 1024, unit: 'KB/s' };
-        return { value: bytesPerSec / (1024*1024), unit: 'MB/s' };
+        if (bytesPerSec < 1024*1024*1024) return { value: bytesPerSec / (1024*1024), unit: 'MB/s' };
+        return { value: bytesPerSec / (1024*1024*1024), unit: 'GB/s' };
     }
 
+    // ====== Анимация чисел ======
     function animateNumber(element, target, suffix, decimals = 1) {
         if (animationTimers[element.id]) clearInterval(animationTimers[element.id]);
         let start = parseFloat(element.getAttribute('data-current')) || 0;
         if (isNaN(start)) start = 0;
         if (start === target && element.innerText === target.toFixed(decimals) + suffix) return;
-        const duration = 300;
-        const stepTime = 10;
-        const steps = duration / stepTime;
+        const duration = 300, stepTime = 10, steps = duration / stepTime;
         const increment = (target - start) / steps;
-        let current = start;
-        let step = 0;
+        let current = start, step = 0;
         const timer = setInterval(() => {
             step++;
             current += increment;
@@ -326,12 +358,9 @@
         let start = parseFloat(element.getAttribute('data-current')) || 0;
         if (isNaN(start)) start = 0;
         if (start === target && element.innerText === target.toFixed(decimals)) return;
-        const duration = 300;
-        const stepTime = 10;
-        const steps = duration / stepTime;
+        const duration = 300, stepTime = 10, steps = duration / stepTime;
         const increment = (target - start) / steps;
-        let current = start;
-        let step = 0;
+        let current = start, step = 0;
         const timer = setInterval(() => {
             step++;
             current += increment;
@@ -348,25 +377,22 @@
 
     function updateNetSpeed(speedElem, unitElem, bytesPerSec) {
         const fmt = formatSpeed(bytesPerSec);
-        animateNetNumber(speedElem, fmt.value, fmt.unit === 'MB/s' ? 1 : (fmt.unit === 'KB/s' ? 1 : 0));
+        const decimals = (bytesPerSec < 1024) ? 0 : (fmt.unit === 'MB/s' ? 1 : (fmt.unit === 'KB/s' ? 1 : 0));
+        animateNetNumber(speedElem, fmt.value, decimals);
         unitElem.innerText = fmt.unit;
+        return fmt.unit; // возвращаем единицу для обновления легенды
     }
 
+    // ====== Диск ======
     function getTotalDiskUsage(data) {
-        let totalUsed = 0;
-        let totalFree = 0;
+        let totalUsed = 0, totalFree = 0;
         for (const fs of data) {
-            const type = fs.fs_type || '';
-            const mnt = fs.mnt_point || '';
+            const type = fs.fs_type || '', mnt = fs.mnt_point || '';
             if (type === 'Squashfs' || type === 'Tmpfs' || type === 'devtmpfs' || type === 'overlay') continue;
             if (mnt.startsWith('/snap/')) continue;
-            if (fs.size > 0) {
-                totalUsed += fs.used;
-                totalFree += fs.free;
-            }
+            if (fs.size > 0) { totalUsed += fs.used; totalFree += fs.free; }
         }
-        const totalBytes = totalUsed + totalFree;
-        return { used: totalUsed, free: totalFree, total: totalBytes };
+        return { used: totalUsed, free: totalFree, total: totalUsed + totalFree };
     }
 
     function declOfNum(number, titles) {
@@ -376,33 +402,26 @@
 
     function parseUptimeToRussian(uptimeStr) {
         if (!uptimeStr) return 'недоступно';
-
         if (typeof uptimeStr === 'number') return _formatSeconds(uptimeStr);
-
         const lower = uptimeStr.toLowerCase();
         if (lower === 'yesterday') return 'вчера';
-
         let match = uptimeStr.match(/(\d+)\s+days?,\s+(\d+):(\d+):(\d+)/i);
         if (match) {
-            const days = parseInt(match[1]), hours = parseInt(match[2]), minutes = parseInt(match[3]), seconds = parseInt(match[4]);
-            let total = days*86400 + hours*3600 + minutes*60 + seconds;
-            return _formatSeconds(total);
+            const days = parseInt(match[1]), hours = parseInt(match[2]),
+                minutes = parseInt(match[3]), seconds = parseInt(match[4]);
+            return _formatSeconds(days*86400 + hours*3600 + minutes*60 + seconds);
         }
-
         match = uptimeStr.match(/^(\d+):(\d+):(\d+)$/);
         if (match) {
             const hours = parseInt(match[1]), minutes = parseInt(match[2]), seconds = parseInt(match[3]);
-            let total = hours*3600 + minutes*60 + seconds;
-            return _formatSeconds(total);
+            return _formatSeconds(hours*3600 + minutes*60 + seconds);
         }
-
         const hoursMatch = uptimeStr.match(/(\d+)\s+hours?/i);
         if (hoursMatch) return _formatSeconds(parseInt(hoursMatch[1]) * 3600);
         const minutesMatch = uptimeStr.match(/(\d+)\s+minutes?/i);
         if (minutesMatch) return _formatSeconds(parseInt(minutesMatch[1]) * 60);
         const daysMatch = uptimeStr.match(/(\d+)\s+days?/i);
         if (daysMatch) return _formatSeconds(parseInt(daysMatch[1]) * 86400);
-
         return uptimeStr;
 
         function _formatSeconds(seconds) {
@@ -411,14 +430,12 @@
             const hours = Math.floor((seconds % 86400) / 3600);
             const minutes = Math.floor((seconds % 3600) / 60);
             const secs = seconds % 60;
-
             const parts = [];
             if (days > 0) parts.push(`${days} ${declOfNum(days, ['день', 'дня', 'дней'])}`);
             if (hours > 0) parts.push(`${hours} ${declOfNum(hours, ['час', 'часа', 'часов'])}`);
             if (minutes > 0) parts.push(`${minutes} ${declOfNum(minutes, ['минута', 'минуты', 'минут'])}`);
             if (secs > 0) parts.push(`${secs} ${declOfNum(secs, ['секунда', 'секунды', 'секунд'])}`);
-            if (parts.length === 0) return 'только что';
-            return parts.join(' ');
+            return parts.length ? parts.join(' ') : 'только что';
         }
     }
 
@@ -435,57 +452,109 @@
         rxHistory.push(rx);
         txHistory.push(tx);
         while (timeLabels.length > MAX_POINTS) {
-            timeLabels.shift(); cpuHistory.shift(); ramHistory.shift(); rxHistory.shift(); txHistory.shift();
+            timeLabels.shift(); cpuHistory.shift(); ramHistory.shift();
+            rxHistory.shift(); txHistory.shift();
         }
     }
 
+    // ====== Авто-юниты для оси Y ======
+    function formatRamTick(value) {
+        if (value >= 1048576) return (value / 1048576).toFixed(1) + ' TB';
+        if (value >= 1024)    return (value / 1024).toFixed(1) + ' GB';
+        return value.toFixed(0) + ' MB';
+    }
+
+    function formatNetTick(value) {
+        if (value >= 1073741824) return (value / 1073741824).toFixed(1) + ' GB/s';
+        if (value >= 1048576)    return (value / 1048576).toFixed(1) + ' MB/s';
+        if (value >= 1024)       return (value / 1024).toFixed(0) + ' KB/s';
+        return value.toFixed(0) + ' B/s';
+    }
+
+    // ====== Обновление графиков ======
     function updateCharts() {
+        const currentTime = getCurrentTimeLabel();
+
+        // CPU
         if (cpuChart) {
             cpuChart.data.labels = [...timeLabels];
             cpuChart.data.datasets[0].data = [...cpuHistory];
-            let maxCpu = Math.max(...cpuHistory, 5);
-            maxCpu = Math.min(Math.ceil(maxCpu * 1.1), 100);
-            if (maxCpu < 5) maxCpu = 10;
+            let maxCpu = Math.max(...cpuHistory, 0);
+            maxCpu = Math.max(maxCpu * 1.1, 5);
             cpuChart.options.scales.y.max = maxCpu;
+            cpuChart.options.scales.y.ticks.callback = (v) => v.toFixed(1) + '%';
             cpuChart.update('none');
+            document.getElementById('cpuUpdateTime').innerText = `Обновлено: ${currentTime}`;
         }
+
+        // RAM
         if (ramChart) {
             ramChart.data.labels = [...timeLabels];
             ramChart.data.datasets[0].data = [...ramHistory];
-            let maxRam = Math.max(...ramHistory, 500);
-            maxRam = Math.ceil(maxRam * 1.1);
-            if (maxRam < 500) maxRam = 800;
+            let maxRam = Math.max(...ramHistory, 0);
+            maxRam = Math.max(maxRam * 1.1, 10);
             ramChart.options.scales.y.max = maxRam;
+            ramChart.options.scales.y.ticks.callback = formatRamTick;
             ramChart.update('none');
+            document.getElementById('ramUpdateTime').innerText = `Обновлено: ${currentTime}`;
         }
+
+        // Сеть
         if (netChart) {
             netChart.data.labels = [...timeLabels];
             netChart.data.datasets[0].data = [...rxHistory];
             netChart.data.datasets[1].data = [...txHistory];
-            let maxNet = Math.max(...rxHistory, ...txHistory, 10);
-            maxNet = Math.ceil(maxNet * 1.1);
-            if (maxNet < 10) maxNet = 40;
-            if (maxNet > 125000) maxNet = 125000;
+            let maxNet = Math.max(...rxHistory, ...txHistory, 0);
+            maxNet = Math.max(maxNet * 1.1, 1);
             netChart.options.scales.y.max = maxNet;
+            netChart.options.scales.y.ticks.callback = formatNetTick;
             netChart.update('none');
+            document.getElementById('netUpdateTime').innerText = `Обновлено: ${currentTime}`;
         }
     }
 
+    // ====== Инициализация графиков ======
     function initCharts() {
         const cpuCtx = document.getElementById('cpuChart').getContext('2d');
-        cpuChart = new Chart(cpuCtx, { type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#F5A0C5', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#F5A0C5', pointStyle: 'circle' }] }, options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 30, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', stepSize: 5, callback: (v) => v + '%' } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } } });
+        cpuChart = new Chart(cpuCtx, {
+            type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#F5A0C5', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#F5A0C5', pointStyle: 'circle' }] },
+            options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxTicksLimit: 8 } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } }
+        });
+
         const ramCtx = document.getElementById('ramChart').getContext('2d');
-        ramChart = new Chart(ramCtx, { type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#FFB347', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#FFB347', pointStyle: 'circle' }] }, options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 2000, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', stepSize: 500, callback: (v) => v + ' MB' } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } } });
+        ramChart = new Chart(ramCtx, {
+            type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#FFB347', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#FFB347', pointStyle: 'circle' }] },
+            options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 1000, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', callback: formatRamTick, maxTicksLimit: 8 } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } }
+        });
+
         const netCtx = document.getElementById('netChart').getContext('2d');
-        netChart = new Chart(netCtx, { type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#6bc5ff', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#6bc5ff', pointStyle: 'circle' }, { label: '', data: [], borderColor: '#F5A0C5', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#F5A0C5', pointStyle: 'circle' }] }, options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 40, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', stepSize: 10, callback: (v) => v + ' KB/s' } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } } });
+        netChart = new Chart(netCtx, {
+            type: 'line', data: { labels: [], datasets: [{ label: '', data: [], borderColor: '#6bc5ff', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#6bc5ff', pointStyle: 'circle' }, { label: '', data: [], borderColor: '#F5A0C5', borderWidth: 2, tension: 0.2, fill: false, pointRadius: 2, pointBackgroundColor: '#F5A0C5', pointStyle: 'circle' }] },
+            options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100, grid: { color: '#2a2a36' }, ticks: { color: '#aaa', callback: formatNetTick, maxTicksLimit: 8 } }, x: { grid: { color: '#2a2a36' }, ticks: { color: '#aaa', maxRotation: 45, autoSkip: true, maxTicksLimit: 6 } } } }
+        });
     }
 
+    // ====== Запросы к API ======
     async function fetchCPU() {
-        try { const resp = await fetch(`${API_BASE}/4/cpu`); const data = await resp.json(); let val = data.total; if (val > 100) val = 100; animateNumber(document.getElementById('cpuPercent'), val, '%', 1); document.getElementById('cpuFill').style.width = val + '%'; return val; } catch(e) { console.error(e); return 0; }
+        try {
+            const resp = await fetch(`${API_BASE}/4/cpu`);
+            const data = await resp.json();
+            let val = data.total;
+            if (val > 100) val = 100;
+            animateNumber(document.getElementById('cpuPercent'), val, '%', 1);
+            document.getElementById('cpuFill').style.width = val + '%';
+            return val;
+        } catch(e) { console.error(e); return 0; }
     }
+
     async function fetchLoad() {
-        try { const resp = await fetch(`${API_BASE}/4/load`); const data = await resp.json(); document.getElementById('loadAvg').innerText = `${data.min1?.toFixed(2)||0} / ${data.min5?.toFixed(2)||0} / ${data.min15?.toFixed(2)||0}`; } catch(e) { console.error(e); }
+        try {
+            const resp = await fetch(`${API_BASE}/4/load`);
+            const data = await resp.json();
+            document.getElementById('loadAvg').innerText = `${data.min1?.toFixed(2)||0} / ${data.min5?.toFixed(2)||0} / ${data.min15?.toFixed(2)||0}`;
+        } catch(e) { console.error(e); }
     }
+
     async function fetchMemory() {
         try {
             const resp = await fetch(`${API_BASE}/4/mem`);
@@ -499,64 +568,82 @@
             animateNumber(document.getElementById('ramUsed'), usedFmt.value, ' ' + usedFmt.unit, usedFmt.unit === 'GB' ? 2 : 0);
             animateNumber(document.getElementById('ramFree'), freeFmt.value, ' ' + freeFmt.unit, freeFmt.unit === 'GB' ? 2 : 0);
             animateNumber(document.getElementById('ramTotal'), totalFmt.value, ' ' + totalFmt.unit, totalFmt.unit === 'GB' ? 2 : 0);
-            const percent = (usedBytes / totalBytes) * 100;
-            document.getElementById('ramFill').style.width = percent + '%';
+            document.getElementById('ramFill').style.width = (usedBytes / totalBytes * 100) + '%';
             return usedBytes / (1024*1024);
         } catch(e) { console.error(e); return 0; }
     }
+
     async function fetchDisks() {
         try {
             const resp = await fetch(`${API_BASE}/4/fs`);
             const data = await resp.json();
             const { used, free, total } = getTotalDiskUsage(data);
-            const usedFmt = formatBytes(used);
-            const freeFmt = formatBytes(free);
-            const totalFmt = formatBytes(total);
+            const usedFmt = formatBytes(used), freeFmt = formatBytes(free), totalFmt = formatBytes(total);
             animateNumber(document.getElementById('diskUsed'), usedFmt.value, ' ' + usedFmt.unit, usedFmt.unit === 'GB' ? 2 : 0);
             animateNumber(document.getElementById('diskFree'), freeFmt.value, ' ' + freeFmt.unit, freeFmt.unit === 'GB' ? 2 : 0);
             animateNumber(document.getElementById('diskTotal'), totalFmt.value, ' ' + totalFmt.unit, totalFmt.unit === 'GB' ? 2 : 0);
-            const percent = total > 0 ? (used / total * 100) : 0;
-            document.getElementById('diskFill').style.width = percent + '%';
+            document.getElementById('diskFill').style.width = total > 0 ? (used / total * 100) + '%' : '0%';
         } catch(e) { console.error('Disks error', e); }
     }
+
     async function fetchNetwork() {
         try {
             const resp = await fetch(`${API_BASE}/4/network`);
             const data = await resp.json();
             const iface = data.find(i => i.interface_name === 'ens3');
             if (iface) {
-                const nowRx = iface.bytes_recv;
-                const nowTx = iface.bytes_sent;
-                const nowTime = Date.now();
+                const nowRx = iface.bytes_recv, nowTx = iface.bytes_sent, nowTime = Date.now();
                 if (prevRx !== null && prevTx !== null && lastNetFetchTime !== 0) {
                     let dt = (nowTime - lastNetFetchTime) / 1000;
                     if (dt > 0) {
-                        let rx = (nowRx - prevRx) / dt;
-                        let tx = (nowTx - prevTx) / dt;
+                        let rx = (nowRx - prevRx) / dt, tx = (nowTx - prevTx) / dt;
                         if (rx < 0) rx = 0; if (tx < 0) tx = 0;
-                        if (rx > 125000000) rx = 125000000;
-                        if (tx > 125000000) tx = 125000000;
-                        updateNetSpeed(document.getElementById('rxSpeed'), document.getElementById('rxUnit'), rx);
-                        updateNetSpeed(document.getElementById('txSpeed'), document.getElementById('txUnit'), tx);
+                        if (rx > 1e9) rx = 1e9; if (tx > 1e9) tx = 1e9;
+                        const rxUnit = updateNetSpeed(document.getElementById('rxSpeed'), document.getElementById('rxUnit'), rx);
+                        const txUnit = updateNetSpeed(document.getElementById('txSpeed'), document.getElementById('txUnit'), tx);
+                        // Обновляем единицы в легенде
+                        document.getElementById('rxLegendUnit').innerText = rxUnit ? ` (${rxUnit})` : '';
+                        document.getElementById('txLegendUnit').innerText = txUnit ? ` (${txUnit})` : '';
                         prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime;
-                        let rxKB = rx / 1024;
-                        let txKB = tx / 1024;
-                        if (rxKB > 125000) rxKB = 125000;
-                        if (txKB > 125000) txKB = 125000;
-                        return { rx: rxKB, tx: txKB };
+                        return { rx: rx / 1024, tx: tx / 1024 };
                     }
                 }
                 prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime;
+                document.getElementById('rxLegendUnit').innerText = '';
+                document.getElementById('txLegendUnit').innerText = '';
                 return { rx: 0, tx: 0 };
-            } else { return { rx: 0, tx: 0 }; }
-        } catch(e) { console.error('Network error', e); return { rx: 0, tx: 0 }; }
+            } else {
+                document.getElementById('rxLegendUnit').innerText = '';
+                document.getElementById('txLegendUnit').innerText = '';
+                return { rx: 0, tx: 0 };
+            }
+        } catch(e) {
+            console.error('Network error', e);
+            document.getElementById('rxLegendUnit').innerText = '';
+            document.getElementById('txLegendUnit').innerText = '';
+            return { rx: 0, tx: 0 };
+        }
     }
+
     async function fetchSystem() {
-        try { const resp = await fetch(`${API_BASE}/4/system`); const data = await resp.json(); let osName = data.os_name || 'Linux'; if (osName === 'Linux') osName = 'Ubuntu 24.04 LTS'; document.getElementById('osinfo').innerText = osName; document.getElementById('kernelInfo').innerText = data.os_version || 'Linux'; } catch(e) { console.error(e); }
+        try {
+            const resp = await fetch(`${API_BASE}/4/system`);
+            const data = await resp.json();
+            let osName = data.os_name || 'Linux';
+            if (osName === 'Linux') osName = 'Ubuntu 24.04 LTS';
+            document.getElementById('osinfo').innerText = osName;
+            document.getElementById('kernelInfo').innerText = data.os_version || 'Linux';
+        } catch(e) { console.error(e); }
     }
+
     async function fetchUptime() {
-        try { const resp = await fetch(`${API_BASE}/4/uptime`); const data = await resp.json(); document.getElementById('serverUptime').innerText = parseUptimeToRussian(data); } catch(e) { console.error(e); document.getElementById('serverUptime').innerText = 'ошибка'; }
+        try {
+            const resp = await fetch(`${API_BASE}/4/uptime`);
+            const data = await resp.json();
+            document.getElementById('serverUptime').innerText = parseUptimeToRussian(data);
+        } catch(e) { console.error(e); document.getElementById('serverUptime').innerText = 'ошибка'; }
     }
+
     async function fetchContainers() {
         try {
             const resp = await fetch(`${API_BASE}/4/containers`);
@@ -602,15 +689,23 @@
         await fetchContainers();
         addDataPoint(cpu, ramMB, net.rx, net.tx);
         updateCharts();
-        const now = getCurrentTimeLabel();
-        document.getElementById('cpuUpdateTime').innerText = `Обновлено: ${now}`;
-        document.getElementById('ramUpdateTime').innerText = `Обновлено: ${now}`;
-        document.getElementById('netUpdateTime').innerText = `Обновлено: ${now}`;
+        saveHistory();
     }
 
     window.onload = () => {
         initCharts();
-        for(let i=0;i<MAX_POINTS;i++) { timeLabels.push(getCurrentTimeLabel()); cpuHistory.push(0); ramHistory.push(0); rxHistory.push(0); txHistory.push(0); }
+        const hasHistory = loadHistory();
+        if (!hasHistory) {
+            for(let i=0; i<MAX_POINTS; i++) {
+                timeLabels.push(getCurrentTimeLabel());
+                cpuHistory.push(0);
+                ramHistory.push(0);
+                rxHistory.push(0);
+                txHistory.push(0);
+            }
+        } else {
+            if (timeLabels.length > 0) timeLabels[timeLabels.length-1] = getCurrentTimeLabel();
+        }
         updateCharts();
         refreshData();
         setInterval(refreshData, 2000);
