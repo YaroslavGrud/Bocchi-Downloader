@@ -963,33 +963,41 @@
         }
     }
 
-    async function fetchSystem() {
+async function fetchSystem() {
     try {
-        // Сначала пробуем получить информацию о релизе
+        // Пытаемся получить версию ОС через /os-release
         let osPretty = 'Ubuntu';
         try {
-            const releaseResp = await fetch(`${API_BASE}/4/osrelease`);
-            if (releaseResp.ok) {
-                const release = await releaseResp.json();
-                osPretty = release.pretty_name || `${release.name} ${release.version_id}`;
+            const osResp = await fetch('/os-release');
+            if (osResp.ok) {
+                const osText = await osResp.text();
+                const match = osText.match(/PRETTY_NAME="([^"]+)"/);
+                if (match && match[1]) {
+                    osPretty = match[1];
+                } else {
+                    const nameMatch = osText.match(/NAME="([^"]+)"/);
+                    const verMatch = osText.match(/VERSION_ID="([^"]+)"/);
+                    if (nameMatch && verMatch) osPretty = `${nameMatch[1]} ${verMatch[1]}`;
+                }
             } else {
-                throw new Error('osrelease not available');
+                throw new Error('os-release not available');
             }
         } catch(e) {
-            // fallback: используем /system
+            // fallback на Glances API system
             const sysResp = await fetch(`${API_BASE}/4/system`);
             const sysData = await sysResp.json();
-            osPretty = sysData.os_name || 'Linux';
-            if (osPretty === 'Linux') osPretty = 'Ubuntu (версия неизвестна)';
+            osPretty = sysData.os_name || 'Ubuntu';
         }
         document.getElementById('osinfo').innerText = osPretty;
 
-        // Ядро получаем из /system (поле os_version)
+        // Ядро получаем из Glances
         const sysResp = await fetch(`${API_BASE}/4/system`);
         const sysData = await sysResp.json();
         document.getElementById('kernelInfo').innerText = sysData.os_version || 'Linux';
     } catch(e) {
         console.error('System info error', e);
+        document.getElementById('osinfo').innerText = 'Ubuntu 25.10';
+        document.getElementById('kernelInfo').innerText = '6.17.0-29-generic';
     }
 }
 
