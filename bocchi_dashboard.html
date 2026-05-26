@@ -964,15 +964,34 @@
     }
 
     async function fetchSystem() {
+    try {
+        // Сначала пробуем получить информацию о релизе
+        let osPretty = 'Ubuntu';
         try {
-            const resp = await fetch(`${API_BASE}/4/system`);
-            const data = await resp.json();
-            let osName = data.os_name || 'Linux';
-            if (osName === 'Linux') osName = 'Ubuntu 24.04 LTS';
-            document.getElementById('osinfo').innerText = osName;
-            document.getElementById('kernelInfo').innerText = data.os_version || 'Linux';
-        } catch(e) { console.error(e); }
+            const releaseResp = await fetch(`${API_BASE}/4/osrelease`);
+            if (releaseResp.ok) {
+                const release = await releaseResp.json();
+                osPretty = release.pretty_name || `${release.name} ${release.version_id}`;
+            } else {
+                throw new Error('osrelease not available');
+            }
+        } catch(e) {
+            // fallback: используем /system
+            const sysResp = await fetch(`${API_BASE}/4/system`);
+            const sysData = await sysResp.json();
+            osPretty = sysData.os_name || 'Linux';
+            if (osPretty === 'Linux') osPretty = 'Ubuntu (версия неизвестна)';
+        }
+        document.getElementById('osinfo').innerText = osPretty;
+
+        // Ядро получаем из /system (поле os_version)
+        const sysResp = await fetch(`${API_BASE}/4/system`);
+        const sysData = await sysResp.json();
+        document.getElementById('kernelInfo').innerText = sysData.os_version || 'Linux';
+    } catch(e) {
+        console.error('System info error', e);
     }
+}
 
     async function fetchUptime() {
         try {
