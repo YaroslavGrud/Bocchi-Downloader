@@ -79,6 +79,11 @@ server {
         rewrite ^/api/(.*) /api/$1 break;
     }
 
+    location /os-release {
+        alias /etc/os-release;
+        default_type text/plain;
+    }
+
     location / {
         try_files $uri $uri/ =404;
     }
