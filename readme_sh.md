@@ -9,11 +9,11 @@
 >
 > ```bash
 > # Войти под bocchi (рабочий пользователь)
-> docker exec -it bocchi-bot bash
+> docker exec -it bocchi_bot bash
 > ```
 > ```bash
 > # Войти под root (для администрирования)
-> docker exec -it -u root bocchi-bot bash
+> docker exec -it -u root bocchi_bot bash
 > ```
 > Если вы уже внутри контейнера и хотите временно получить права ```root```:
 > ```bash
