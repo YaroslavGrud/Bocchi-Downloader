@@ -963,39 +963,55 @@
         }
     }
 
-async function fetchSystem() {
+async function fetchSystem() { // Исправлено: async с маленькой буквы
     try {
-        // Пытаемся получить версию ОС через /os-release
-        let osPretty = 'Ubuntu';
+        let osPretty = null; // Изначально null, чтобы понять, получилось ли достать данные
+
+        // 1. Пытаемся получить версию ОС через /os-release
         try {
             const osResp = await fetch('/os-release');
-            if (osResp.ok) {
-                const osText = await osResp.text();
-                const match = osText.match(/PRETTY_NAME="([^"]+)"/);
-                if (match && match[1]) {
-                    osPretty = match[1];
-                } else {
-                    const nameMatch = osText.match(/NAME="([^"]+)"/);
-                    const verMatch = osText.match(/VERSION_ID="([^"]+)"/);
-                    if (nameMatch && verMatch) osPretty = `${nameMatch[1]} ${verMatch[1]}`;
-                }
-            } else {
+            if (!osResp.ok) {
                 throw new Error('os-release not available');
             }
+            
+            const osText = await osResp.text();
+            const match = osText.match(/PRETTY_NAME="([^"]+)"/);
+            
+            if (match && match[1]) {
+                osPretty = match[1];
+            } else {
+                const nameMatch = osText.match(/NAME="([^"]+)"/);
+                const verMatch = osText.match(/VERSION_ID="([^"]+)"/);
+                if (nameMatch && verMatch) {
+                    osPretty = `${nameMatch[1]} ${verMatch[1]}`;
+                }
+            }
         } catch(e) {
-            // fallback на Glances API system
-            const sysResp = await fetch(`${API_BASE}/4/system`);
-            const sysData = await sysResp.json();
-            osPretty = sysData.os_name || 'Ubuntu';
+            // Оставляем osPretty = null, обработаем это на следующем шаге
+            console.warn('Не удалось прочитать /os-release, используем Glances API');
         }
-        document.getElementById('osinfo').innerText = osPretty;
 
-        // Ядро получаем из Glances
+        // 2. Получаем системную информацию из Glances (делаем один запрос для всего)
         const sysResp = await fetch(`${API_BASE}/4/system`);
+        if (!sysResp.ok) {
+            throw new Error('Glances API not available');
+        }
+        
         const sysData = await sysResp.json();
-        document.getElementById('kernelInfo').innerText = sysData.os_version || 'Linux';
+
+        // Если /os-release не сработал, берем имя из Glances (или ставим дефолтное 'Ubuntu')
+        osPretty = osPretty || sysData.os_name || 'Ubuntu';
+        
+        // Ядро получаем всегда из Glances
+        const kernelInfo = sysData.os_version || 'Linux';
+
+        // 3. Обновляем DOM только после успешного получения всех данных
+        document.getElementById('osinfo').innerText = osPretty;
+        document.getElementById('kernelInfo').innerText = kernelInfo;
+
     } catch(e) {
-        console.error('System info error', e);
+        // Сюда попадем, если API_BASE не определен, сеть недоступна или Glances API лежит
+        console.error('System info error:', e);
         document.getElementById('osinfo').innerText = 'Ubuntu 25.10';
         document.getElementById('kernelInfo').innerText = '6.17.0-29-generic';
     }
