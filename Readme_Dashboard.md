@@ -5,6 +5,9 @@
 
 ![Dashboard Preview](https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/image.png)
 
+> [!Warning]
+> Пинг Яндекс.Музыки, отображаемый на дашборде, измеряется через ваш браузер и интернет-соединение. Реальное время отклика составляет около 47 миллисекунд. 
+
 ## 📊 Отображаемые метрики
 
 *   Загрузка **CPU** (процент, график, load average)
