@@ -13,7 +13,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Log in to Docker Hub
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
@@ -29,7 +29,7 @@ jobs:
           tags: yaroslavgrud/bocchi-downloader-server-edition:latest
 
       - name: Docker Scout security scan
-        uses: docker/scout-action@cd72f264beff1cd72735de31148b9d3244a0234a
+        uses: docker/scout-action@7520205ff60037fdc436b40b6a1d1e55a839ec2d
         with:
           command: cves
           image: yaroslavgrud/bocchi-downloader-server-edition:latest
