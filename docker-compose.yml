@@ -17,3 +17,4 @@ services:
     security_opt:
       - no-new-privileges:true
     # read_only: true   # Убрано — теперь бот может писать в /app
+    
