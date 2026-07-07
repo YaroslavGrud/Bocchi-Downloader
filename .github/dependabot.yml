@@ -4,6 +4,8 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    cooldown:                         # <-- Добавлено
+      default-days: 7                 # ждём 7 дней перед созданием PR для новых версий
     open-pull-requests-limit: 10
     groups:
       python-packages:
@@ -19,6 +21,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:                         # <-- Добавлено
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       actions:
@@ -33,6 +37,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:                         # <-- Добавлено
+      default-days: 7
     open-pull-requests-limit: 10
     groups:
       docker:
