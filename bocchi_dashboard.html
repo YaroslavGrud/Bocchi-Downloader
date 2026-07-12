@@ -634,18 +634,22 @@
 
     // === Пинг до Яндекс Музыки ===
     async function pingYandexMusic() {
-        const url = 'https://music.yandex.ru/favicon.ico';
-        const start = performance.now();
         try {
-            await fetch(url, { method: 'GET', mode: 'no-cors', cache: 'no-store' });
-        } catch (e) { /* игнорируем CORS */ }
-        const latency = Math.round(performance.now() - start);
-        document.getElementById('pingValue').innerText = latency;
-        const container = document.getElementById('pingStatusContainer');
-        if (latency < 100) container.className = 'ping-status good';
-        else if (latency < 200) container.className = 'ping-status warn';
-        else container.className = 'ping-status bad';
-        return latency;
+            const resp = await fetch('/api/ping');
+            const data = await resp.json();
+            const latency = data.latency;
+            document.getElementById('pingValue').innerText = latency;
+            const container = document.getElementById('pingStatusContainer');
+            if (latency < 0) { container.className = 'ping-status bad'; }
+            else if (latency < 100) container.className = 'ping-status good';
+            else if (latency < 200) container.className = 'ping-status warn';
+            else container.className = 'ping-status bad';
+            return latency;
+        } catch(e) {
+            document.getElementById('pingValue').innerText = '—';
+            document.getElementById('pingStatusContainer').className = 'ping-status bad';
+            return -1;
+        }
     }
 
     // === Glances API ===
