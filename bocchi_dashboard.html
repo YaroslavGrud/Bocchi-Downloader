@@ -1111,5 +1111,232 @@
         setInterval(refreshData, 2000);
     };
 </script>
+    <!-- ========== ПЛАВАЮЩАЯ КНОПКА С ПОЯСНЕНИЕМ ========== -->
+<style>
+    .info-float {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        width: 48px;
+        height: 48px;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    .info-float-btn {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #F5A0C5, #FF8EB5);
+        border: none;
+        color: #fff;
+        font-size: 24px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 4px 20px rgba(245, 160, 197, 0.4);
+        transition: all 0.25s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        position: absolute;
+        top: 0;
+        left: 0;
+        z-index: 10000;
+    }
+    .info-float-btn:hover {
+        transform: scale(1.08);
+        box-shadow: 0 6px 35px rgba(245, 160, 197, 0.7), 0 0 20px rgba(245, 160, 197, 0.3);
+        border-color: rgba(245, 160, 197, 0.5);
+    }
+    .info-float-btn:active {
+        transform: scale(0.95);
+    }
+    .info-float-popup {
+        position: absolute;
+        bottom: 60px;
+        right: 0;
+        width: 320px;
+        max-width: 90vw;
+        background: rgba(20, 21, 28, 0.95);
+        backdrop-filter: blur(18px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 24px;
+        padding: 20px 24px;
+        box-shadow:
+            0 18px 55px rgba(0, 0, 0, 0.4),
+            inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        color: #e8ecf2;
+        font-size: 0.85rem;
+        line-height: 1.6;
+        display: none;
+        transition: opacity 0.2s ease, transform 0.25s ease;
+        pointer-events: auto;
+        transform-origin: bottom right;
+        overflow: hidden;
+        z-index: 9998;
+    }
+    .info-float-popup::before {
+        content: "";
+        position: absolute;
+        inset: -1px;
+        pointer-events: none;
+        background:
+            radial-gradient(
+                340px circle at 80% 20%,
+                rgba(245, 160, 197, 0.25),
+                rgba(107, 197, 255, 0.12) 40%,
+                transparent 70%
+            );
+        opacity: 0.7;
+        z-index: 0;
+        border-radius: inherit;
+        transition: opacity 0.3s ease;
+    }
+    .info-float-popup::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        padding: 1px;
+        background:
+            linear-gradient(
+                135deg,
+                rgba(245, 160, 197, 0.25),
+                rgba(107, 197, 255, 0.08),
+                rgba(255,255,255,0.02)
+            );
+        mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        mask-composite: exclude;
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor;
+        pointer-events: none;
+        opacity: 0.6;
+        z-index: 0;
+    }
+    .info-float-popup > * {
+        position: relative;
+        z-index: 1;
+    }
+    .info-float-popup.show {
+        display: block;
+        animation: popupIn 0.25s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+    }
+    @keyframes popupIn {
+        0% { opacity: 0; transform: scale(0.96) translateY(10px); }
+        100% { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .info-float-popup h4 {
+        margin: 0 0 10px 0;
+        color: #fff;
+        font-weight: 600;
+        font-size: 1rem;
+        letter-spacing: -0.2px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        padding-bottom: 10px;
+    }
+    .info-float-popup h4::before {
+        content: "ⓘ";
+        font-size: 1.1rem;
+        color: #F5A0C5;
+    }
+    /* Стили для подсветки команд */
+    .info-float-popup code {
+        background: rgba(255, 255, 255, 0.08);
+        padding: 0 6px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        color: #F5A0C5;
+        font-family: 'Inter', monospace;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+    .info-float-popup p {
+        margin: 0 0 16px 0;
+        color: #d0d6e0;
+        font-size: 0.8rem;
+        line-height: 1.6;
+    }
+    .info-float-popup .close-btn {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #8b949e;
+        padding: 6px 16px;
+        border-radius: 40px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        float: right;
+        margin-top: 4px;
+        backdrop-filter: blur(4px);
+    }
+    .info-float-popup .close-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        border-color: rgba(255, 255, 255, 0.2);
+        box-shadow: 0 0 12px rgba(245, 160, 197, 0.2);
+    }
+    @media (max-width: 640px) {
+        .info-float {
+            bottom: 16px;
+            right: 16px;
+        }
+        .info-float-popup {
+            width: 280px;
+            right: 0;
+            bottom: 56px;
+            padding: 16px 18px;
+        }
+    }
+</style>
+
+<div class="info-float" id="infoFloat">
+    <button class="info-float-btn" id="infoFloatBtn" aria-label="Информация о метриках">!</button>
+    <div class="info-float-popup" id="infoFloatPopup">
+        <h4>О метриках</h4>
+        <p>
+            Данные на этой странице адаптированы для удобства восприятия и отражают реальную картину с точки зрения пользователя.<br>
+            Например, размер диска показан как сумма занятого и свободного места — именно столько вы можете использовать.<br>
+            Технические значения (например, из <code>df -h</code>) могут незначительно отличаться из-за системных резервов, но все цифры на дашборде получены напрямую из системы и полностью корректны.
+        </p>
+        <button class="close-btn" id="infoFloatClose">Закрыть</button>
+    </div>
+</div>
+
+<script>
+    (function() {
+        const btn = document.getElementById('infoFloatBtn');
+        const popup = document.getElementById('infoFloatPopup');
+        const closeBtn = document.getElementById('infoFloatClose');
+
+        function togglePopup(show) {
+            if (show) {
+                popup.classList.add('show');
+            } else {
+                popup.classList.remove('show');
+            }
+        }
+
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const isVisible = popup.classList.contains('show');
+            togglePopup(!isVisible);
+        });
+
+        closeBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            togglePopup(false);
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('#infoFloat')) {
+                togglePopup(false);
+            }
+        });
+    })();
+</script>
 </body>
 </html>
