@@ -3,8 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <!-- ========== МЕТА-ТЕГИ ДЛЯ ОТКЛЮЧЕНИЯ КЕШИРОВАНИЯ ========== -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Bocchi Downloader · Server Status</title>
     <link rel="icon" type="image/png" href="https://cdn-icons-png.flaticon.com/512/355/355081.png">
+    <!-- Шрифты и иконки -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
         integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
@@ -13,19 +18,22 @@
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css"
       integrity="sha384-5e2ESR8Ycmos6g3gAKr1Jvwye8sW4U1u/cAKulfVJnkakCcMqhOudbtPnvJ+nbv7"
       crossorigin="anonymous">
+
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* ========== CSS-ПЕРЕМЕННЫЕ ========== */
         :root {
-            --bg-main: #080910;
-            --bg-card: rgba(20, 21, 28, 0.72);
-            --border-soft: rgba(255, 255, 255, 0.08);
-            --accent: #F5A0C5;
-            --accent-2: #FF8EB5;
-            --blue: #6bc5ff;
-            --text-main: #e8ecf2;
-            --text-muted: #8b949e;
+            --bg-main: #080910;                /* основной фон страницы */
+            --bg-card: rgba(20, 21, 28, 0.72); /* фон карточек с прозрачностью */
+            --border-soft: rgba(255, 255, 255, 0.08); /* тонкие границы */
+            --accent: #F5A0C5;                 /* розовый акцент */
+            --accent-2: #FF8EB5;               /* более яркий розовый */
+            --blue: #6bc5ff;                   /* голубой для сети */
+            --text-main: #e8ecf2;              /* основной цвет текста */
+            --text-muted: #8b949e;             /* приглушённый текст */
         }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
+            /* Радиальные градиенты для красивого фона */
             background:
                 radial-gradient(circle at 15% 10%, rgba(245, 160, 197, 0.16), transparent 32%),
                 radial-gradient(circle at 85% 20%, rgba(107, 197, 255, 0.12), transparent 34%),
@@ -45,6 +53,7 @@
             flex: 1;
             width: 100%;
         }
+        /* ========== ШАПКА САЙТА ========== */
         .header {
             display: flex;
             flex-wrap: wrap;
@@ -53,14 +62,9 @@
             margin-bottom: 28px;
             gap: 12px;
         }
-        .header-title {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+        .header-title { display: flex; align-items: center; gap: 12px; }
         .logo-icon {
-            width: 38px;
-            height: 38px;
+            width: 38px; height: 38px;
             background: linear-gradient(135deg, #F5A0C5, #FF8EB5);
             border-radius: 10px;
             display: flex;
@@ -70,26 +74,11 @@
             font-size: 18px;
             box-shadow: 0 0 15px rgba(245, 160, 197, 0.4);
         }
-        .title {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: #fff;
-            letter-spacing: -0.3px;
-        }
-        .subtitle {
-            font-size: 0.75rem;
-            color: #8b949e;
-            margin-top: 2px;
-        }
+        .title { font-size: 1.5rem; font-weight: 700; color: #fff; letter-spacing: -0.3px; }
+        .subtitle { font-size: 0.75rem; color: #8b949e; margin-top: 2px; }
 
-        /* Группа статусов (бот + пинг) – плотно друг к другу */
-        .status-group {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        /* Общий стиль для пилюль – без лишних цветных рамок */
+        /* ========== СТАТУС-ПИЛЮЛИ ========== */
+        .status-group { display: flex; gap: 8px; align-items: center; }
         .bot-status, .ping-status {
             display: flex;
             align-items: center;
@@ -105,48 +94,26 @@
             cursor: default;
             box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         }
-
-        /* Динамическое освещение при наведении */
         .bot-status:hover, .ping-status:hover {
             transform: translateY(-1px);
             border-color: rgba(245, 160, 197, 0.5);
             box-shadow: 0 8px 20px rgba(0,0,0,0.3), 0 0 12px rgba(245, 160, 197, 0.4);
             background: rgba(255, 255, 255, 0.07);
         }
-
-        /* Общий LED-индикатор */
         .status-led {
-            width: 8px;
-            height: 8px;
+            width: 8px; height: 8px;
             border-radius: 50%;
             transition: all 0.2s;
         }
+        /* Цвета для статуса бота */
+        .bot-status.online .status-led { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+        .bot-status.offline .status-led { background: #e74c3c; box-shadow: 0 0 6px #e74c3c; }
+        /* Цвета для пинга (good/warn/bad) */
+        .ping-status.good .status-led { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+        .ping-status.warn .status-led { background: #f1c40f; box-shadow: 0 0 6px #f1c40f; }
+        .ping-status.bad .status-led { background: #e74c3c; box-shadow: 0 0 6px #e74c3c; }
 
-        /* Статус бота – цвета */
-        .bot-status.online .status-led {
-            background: #2ecc71;
-            box-shadow: 0 0 6px #2ecc71;
-        }
-        .bot-status.offline .status-led {
-            background: #e74c3c;
-            box-shadow: 0 0 6px #e74c3c;
-        }
-
-        /* Пинг – цвета в зависимости от задержки */
-        .ping-status.good .status-led {
-            background: #2ecc71;
-            box-shadow: 0 0 6px #2ecc71;
-        }
-        .ping-status.warn .status-led {
-            background: #f1c40f;
-            box-shadow: 0 0 6px #f1c40f;
-        }
-        .ping-status.bad .status-led {
-            background: #e74c3c;
-            box-shadow: 0 0 6px #e74c3c;
-        }
-
-        /* Системная строка */
+        /* ========== СИСТЕМНАЯ СТРОКА ========== */
         .system-bar {
             display: flex;
             flex-wrap: wrap;
@@ -160,16 +127,10 @@
             font-size: 0.8rem;
             color: #b0b8c4;
         }
-        .system-bar i {
-            margin-right: 6px;
-            color: #F5A0C5;
-        }
-        .system-bar span {
-            font-weight: 500;
-            color: #e1e4e8;
-        }
+        .system-bar i { margin-right: 6px; color: #F5A0C5; }
+        .system-bar span { font-weight: 500; color: #e1e4e8; }
 
-        /* Сетка карточек */
+        /* ========== СЕТКА КАРТОЧЕК ========== */
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -196,6 +157,7 @@
             display: flex;
             flex-direction: column;
             cursor: default;
+            /* Переменные для эффекта свечения при наведении */
             --mx: 50%;
             --my: 50%;
             --glow-alpha: 0;
@@ -229,13 +191,9 @@
                     rgba(107, 197, 255, 0.10),
                     rgba(255,255,255,0.03)
                 );
-            mask:
-                linear-gradient(#000 0 0) content-box,
-                linear-gradient(#000 0 0);
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
             mask-composite: exclude;
-            -webkit-mask:
-                linear-gradient(#000 0 0) content-box,
-                linear-gradient(#000 0 0);
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
             -webkit-mask-composite: xor;
             pointer-events: none;
             opacity: 0.7;
@@ -323,6 +281,8 @@
 </head>
 <body>
 <div class="dashboard">
+
+    <!-- ==================== ШАПКА ==================== -->
     <div class="header">
         <div class="header-title">
             <div class="logo-icon"><i class="fas fa-server"></i></div>
@@ -331,7 +291,7 @@
                 <div class="subtitle">Статус сервера в реальном времени</div>
             </div>
         </div>
-        <!-- Группа пилюль: бот + пинг, плотно друг к другу -->
+        <!-- Блок статусов: бот + пинг -->
         <div class="status-group">
             <div class="bot-status online" id="botStatusContainer">
                 <span class="status-led" id="statusLed"></span>
@@ -344,13 +304,15 @@
         </div>
     </div>
 
+    <!-- ==================== СИСТЕМНАЯ СТРОКА ==================== -->
     <div class="system-bar">
         <div><i class="fas fa-desktop"></i> ОС: <span id="osinfo">Ubuntu</span> · <span id="kernelInfo">загрузка...</span></div>
         <div><i class="fas fa-clock"></i> Время работы: <span id="serverUptime">--</span></div>
     </div>
 
+    <!-- ==================== СЕТКА КАРТОЧЕК ==================== -->
     <div class="grid">
-        <!-- CPU Card -->
+        <!-- Карточка CPU -->
         <div class="card">
             <div class="card-title"><i class="fas fa-microchip"></i> Процессор</div>
             <div class="metric-row">
@@ -369,7 +331,7 @@
             </div>
         </div>
 
-        <!-- RAM Card -->
+        <!-- Карточка RAM -->
         <div class="card">
             <div class="card-title"><i class="fas fa-memory"></i> Оперативная память</div>
             <div class="metric-row">
@@ -392,7 +354,7 @@
             </div>
         </div>
 
-        <!-- Network Card -->
+        <!-- Карточка сети -->
         <div class="card">
             <div class="card-title"><i class="fas fa-network-wired"></i> Сеть</div>
             <div class="metric-row" style="justify-content: space-evenly;">
@@ -409,7 +371,7 @@
             </div>
         </div>
 
-        <!-- Disk Card -->
+        <!-- Карточка диска -->
         <div class="card">
             <div class="card-title"><i class="fas fa-hdd"></i> Диск</div>
             <div class="metric-row">
@@ -431,30 +393,121 @@
 </div>
 
 <script>
-    /* global Chart */
+    /* ============================================================
+       ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И КОНСТАНТЫ
+       ============================================================ */
+
+    // Базовый путь к API Glances (через Nginx проксируется на порт 61208)
     const API_BASE = '/api';
+
+    // Количество точек на графиках (последние 20)
     const MAX_POINTS = 20;
+
+    // Ключ для localStorage, где хранится история графиков
     const STORAGE_KEY = 'bocchi_history';
 
-    let timeLabels = [], cpuHistory = [], ramHistory = [], rxHistory = [], txHistory = [];
+    // Ключ для идентификатора сессии (чтобы отличать запуски страницы)
+    const SESSION_KEY = 'bocchi_session_id';
+
+    // Версия формата данных в localStorage (при изменении старые данные игнорируются)
+    const STORAGE_VERSION = 2;
+
+    // Массивы для хранения истории графиков
+    let timeLabels = [],      // временные метки (строки)
+        cpuHistory = [],      // загрузка CPU
+        ramHistory = [],      // использовано RAM (в MB)
+        rxHistory = [],       // входящий трафик (байт/с)
+        txHistory = [];       // исходящий трафик (байт/с)
+
+    // Переменные для расчёта скорости сети (предыдущие значения и время)
     let prevRx = null, prevTx = null, lastNetFetchTime = 0;
+
+    // Объекты графиков Chart.js
     let cpuChart, ramChart, netChart;
+
+    // Хранилище таймеров для анимации чисел (чтобы не накладывались)
     let animationTimers = {};
 
-    // === localStorage ===
+    /* ============================================================
+       УПРАВЛЕНИЕ СЕССИЕЙ И ВЕРСИОНИРОВАНИЕ
+       ============================================================ */
+
+    /**
+     * Возвращает уникальный идентификатор сессии.
+     * Если его нет в localStorage – создаёт новый.
+     */
+    function getSessionId() {
+        let session = localStorage.getItem(SESSION_KEY);
+        if (!session) {
+            // Генерируем: время (в 36-й системе) + случайный суффикс
+            session = Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 6);
+            localStorage.setItem(SESSION_KEY, session);
+        }
+        return session;
+    }
+
+    /**
+     * Полностью очищает историю графиков и localStorage.
+     * Вызывается при ошибках загрузки данных или при смене сессии.
+     */
+    function clearHistory() {
+        localStorage.removeItem(STORAGE_KEY);
+        timeLabels = [];
+        cpuHistory = [];
+        ramHistory = [];
+        rxHistory = [];
+        txHistory = [];
+        // Заполняем пустыми значениями, чтобы графики не были пустыми
+        for (let i = 0; i < MAX_POINTS; i++) {
+            timeLabels.push('');
+            cpuHistory.push(0);
+            ramHistory.push(0);
+            rxHistory.push(0);
+            txHistory.push(0);
+        }
+        updateCharts();
+    }
+
+    /**
+     * Сохраняет текущую историю в localStorage вместе с версией и сессией.
+     */
     function saveHistory() {
-        const data = { timeLabels, cpuHistory, ramHistory, rxHistory, txHistory };
+        const data = {
+            version: STORAGE_VERSION,
+            session: getSessionId(),
+            timeLabels,
+            cpuHistory,
+            ramHistory,
+            rxHistory,
+            txHistory
+        };
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
         catch (e) { console.warn('localStorage переполнен'); }
     }
+
+    /**
+     * Загружает историю из localStorage.
+     * Если версия или сессия не совпадают – очищает хранилище и возвращает false.
+     */
     function loadHistory() {
         try {
             const saved = localStorage.getItem(STORAGE_KEY);
             if (!saved) return false;
             const data = JSON.parse(saved);
-            if (data.timeLabels && Array.isArray(data.timeLabels) && data.cpuHistory && data.ramHistory && data.rxHistory && data.txHistory) {
+            // Проверяем версию и сессию
+            if (data.version !== STORAGE_VERSION || data.session !== getSessionId()) {
+                localStorage.removeItem(STORAGE_KEY);
+                return false;
+            }
+            if (data.timeLabels && Array.isArray(data.timeLabels) &&
+                data.cpuHistory && data.ramHistory && data.rxHistory && data.txHistory) {
+                // Обрезаем до MAX_POINTS
                 while (data.timeLabels.length > MAX_POINTS) {
-                    data.timeLabels.shift(); data.cpuHistory.shift(); data.ramHistory.shift(); data.rxHistory.shift(); data.txHistory.shift();
+                    data.timeLabels.shift();
+                    data.cpuHistory.shift();
+                    data.ramHistory.shift();
+                    data.rxHistory.shift();
+                    data.txHistory.shift();
                 }
                 timeLabels = data.timeLabels;
                 cpuHistory = data.cpuHistory;
@@ -467,7 +520,13 @@
         return false;
     }
 
-    // === Форматирование ===
+    /* ============================================================
+       ФОРМАТИРОВАНИЕ ЧИСЕЛ И ЕДИНИЦ ИЗМЕРЕНИЯ
+       ============================================================ */
+
+    /**
+     * Форматирует байты в человекочитаемый вид (B, KB, MB, GB).
+     */
     function formatBytes(bytes) {
         if (!bytes) return { value: 0, unit: 'B' };
         if (bytes < 1024) return { value: bytes, unit: 'B' };
@@ -475,12 +534,20 @@
         if (bytes < 1073741824) return { value: bytes / (1024*1024), unit: 'MB' };
         return { value: bytes / (1024*1024*1024), unit: 'GB' };
     }
+
+    /**
+     * Форматирует скорость (байт/с) в B/s, KB/s, MB/s, GB/s.
+     */
     function formatSpeed(bytesPerSec) {
         if (bytesPerSec < 1024) return { value: bytesPerSec, unit: 'B/s' };
         if (bytesPerSec < 1048576) return { value: bytesPerSec / 1024, unit: 'KB/s' };
         if (bytesPerSec < 1073741824) return { value: bytesPerSec / 1048576, unit: 'MB/s' };
         return { value: bytesPerSec / 1073741824, unit: 'GB/s' };
     }
+
+    /**
+     * Плавная анимация изменения числа с суффиксом (например, "45.2 GB").
+     */
     function animateNumber(element, target, suffix, decimals = 1) {
         if (animationTimers[element.id]) clearInterval(animationTimers[element.id]);
         let start = parseFloat(element.getAttribute('data-current')) || 0;
@@ -501,6 +568,10 @@
         }, stepTime);
         animationTimers[element.id] = timer;
     }
+
+    /**
+     * Анимация для чисел без суффикса (используется для скорости сети).
+     */
     function animateNetNumber(element, target, decimals = 1) {
         if (animationTimers[element.id]) clearInterval(animationTimers[element.id]);
         let start = parseFloat(element.getAttribute('data-current')) || 0;
@@ -521,12 +592,21 @@
         }, stepTime);
         animationTimers[element.id] = timer;
     }
+
+    /**
+     * Обновляет отображение скорости сети (вызывает анимацию и устанавливает единицу).
+     */
     function updateNetSpeed(speedElem, unitElem, bytesPerSec) {
         const fmt = formatSpeed(bytesPerSec);
         const decimals = (bytesPerSec < 1024) ? 0 : (fmt.unit === 'MB/s' ? 1 : (fmt.unit === 'KB/s' ? 1 : 0));
         animateNetNumber(speedElem, fmt.value, decimals);
         unitElem.innerText = fmt.unit;
     }
+
+    /**
+     * Суммирует использованное и свободное место по всем разделам диска,
+     * исключая squashfs, tmpfs, devtmpfs, overlay и снап-монтирования.
+     */
     function getTotalDiskUsage(data) {
         let totalUsed = 0, totalFree = 0;
         for (const fs of data) {
@@ -537,7 +617,18 @@
         }
         return { used: totalUsed, free: totalFree, total: totalUsed + totalFree };
     }
-    function declOfNum(number, titles) { const cases = [2,0,1,1,1,2]; return titles[(number%100>4 && number%100<20)?2:cases[(number%10<5)?number%10:5]]; }
+
+    /**
+     * Склонение числительных (для uptime).
+     */
+    function declOfNum(number, titles) {
+        const cases = [2,0,1,1,1,2];
+        return titles[(number%100>4 && number%100<20)?2:cases[(number%10<5)?number%10:5]];
+    }
+
+    /**
+     * Парсит строку uptime из Glances и возвращает русскую фразу.
+     */
     function parseUptimeToRussian(uptimeStr) {
         if (!uptimeStr) return 'недоступно';
         if (typeof uptimeStr === 'number') return _formatSeconds(uptimeStr);
@@ -568,7 +659,17 @@
             return parts.length ? parts.join(' ') : 'только что';
         }
     }
-    function getCurrentTimeLabel() { return new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' }); }
+
+    /**
+     * Возвращает текущее время в формате ЧЧ:ММ:СС (для меток на графиках).
+     */
+    function getCurrentTimeLabel() {
+        return new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    }
+
+    /**
+     * Добавляет новую точку данных в историю и обрезает до MAX_POINTS.
+     */
     function addDataPoint(cpu, ram, rx, tx) {
         const ts = getCurrentTimeLabel();
         timeLabels.push(ts);
@@ -577,14 +678,26 @@
         rxHistory.push(rx);
         txHistory.push(tx);
         while (timeLabels.length > MAX_POINTS) {
-            timeLabels.shift(); cpuHistory.shift(); ramHistory.shift(); rxHistory.shift(); txHistory.shift();
+            timeLabels.shift();
+            cpuHistory.shift();
+            ramHistory.shift();
+            rxHistory.shift();
+            txHistory.shift();
         }
     }
+
+    /**
+     * Находит максимальное значение среди переданных массивов (для автоподбора шкалы).
+     */
     function getArrayMax(...arrays) {
         let max = 0;
         for (const arr of arrays) if (Array.isArray(arr)) for (const v of arr) if (Number.isFinite(v) && v > max) max = v;
         return max;
     }
+
+    /**
+     * Округляет максимальное значение до "красивого" числа (1, 2, 2.5, 5, 10...).
+     */
     function niceMax(value, fallback = 1) {
         if (!Number.isFinite(value) || value <= 0) return fallback;
         const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
@@ -592,9 +705,39 @@
         let nice = residual <= 1 ? 1 : residual <= 2 ? 2 : residual <= 2.5 ? 2.5 : residual <= 5 ? 5 : 10;
         return nice * magnitude;
     }
-    function formatRamTick(value) { const max = this?.max || value; if (max >= 1048576) return `${(value/1048576).toFixed(2)} TB`; if (max >= 1024) { const gb = value/1024; return max < 10*1024 ? `${gb.toFixed(2)} GB` : `${gb.toFixed(1)} GB`; } return `${Math.round(value)} MB`; }
-    function formatNetTick(value) { const max = this?.max || value; if (max >= 1073741824) return `${(value/1073741824).toFixed(2)} GB/s`; if (max >= 1048576) { const mb = value/1048576; return max < 10*1048576 ? `${mb.toFixed(2)} MB/s` : `${mb.toFixed(1)} MB/s`; } if (max >= 1024) { const kb = value/1024; return max < 10*1024 ? `${kb.toFixed(1)} KB/s` : `${kb.toFixed(0)} KB/s`; } return `${Math.round(value)} B/s`; }
+
+    /* ============================================================
+       ФУНКЦИИ ДЛЯ ОТРИСОВКИ ГРАФИКОВ (Chart.js)
+       ============================================================ */
+
+    // Функции форматирования подписей на осях
+    function formatRamTick(value) {
+        const max = this?.max || value;
+        if (max >= 1048576) return `${(value/1048576).toFixed(2)} TB`;
+        if (max >= 1024) {
+            const gb = value/1024;
+            return max < 10*1024 ? `${gb.toFixed(2)} GB` : `${gb.toFixed(1)} GB`;
+        }
+        return `${Math.round(value)} MB`;
+    }
+    function formatNetTick(value) {
+        const max = this?.max || value;
+        if (max >= 1073741824) return `${(value/1073741824).toFixed(2)} GB/s`;
+        if (max >= 1048576) {
+            const mb = value/1048576;
+            return max < 10*1048576 ? `${mb.toFixed(2)} MB/s` : `${mb.toFixed(1)} MB/s`;
+        }
+        if (max >= 1024) {
+            const kb = value/1024;
+            return max < 10*1024 ? `${kb.toFixed(1)} KB/s` : `${kb.toFixed(0)} KB/s`;
+        }
+        return `${Math.round(value)} B/s`;
+    }
     function formatCpuTick(value) { return `${Math.round(value)}%`; }
+
+    /**
+     * Обновляет все три графика (CPU, RAM, сеть) новыми данными.
+     */
     function updateCharts() {
         const currentTime = getCurrentTimeLabel();
         if (cpuChart) {
@@ -623,16 +766,70 @@
             document.getElementById('netUpdateTime').innerText = `Обновлено: ${currentTime}`;
         }
     }
+
+    /**
+     * Инициализация графиков (вызывается один раз при загрузке страницы).
+     */
     function initCharts() {
         const cpuCtx = document.getElementById('cpuChart').getContext('2d');
-        cpuChart = new Chart(cpuCtx, { type:'line', data:{ labels:[], datasets:[{ data:[], borderColor:'#F5A0C5', borderWidth:2, tension:0.2, fill:true, backgroundColor:'rgba(245,160,197,0.1)', pointRadius:0 }] }, options:{ responsive:true, maintainAspectRatio:true, plugins:{ legend:{ display:false } }, scales:{ y:{ min:0, max:100, grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', callback:formatCpuTick, maxTicksLimit:5 } }, x:{ grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', maxRotation:45, autoSkip:true, maxTicksLimit:6 } } } } });
+        cpuChart = new Chart(cpuCtx, {
+            type:'line',
+            data:{ labels:[], datasets:[{ data:[], borderColor:'#F5A0C5', borderWidth:2, tension:0.2, fill:true, backgroundColor:'rgba(245,160,197,0.1)', pointRadius:0 }] },
+            options:{
+                responsive:true,
+                maintainAspectRatio:true,
+                plugins:{ legend:{ display:false } },
+                scales:{
+                    y:{ min:0, max:100, grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', callback:formatCpuTick, maxTicksLimit:5 } },
+                    x:{ grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', maxRotation:45, autoSkip:true, maxTicksLimit:6 } }
+                }
+            }
+        });
         const ramCtx = document.getElementById('ramChart').getContext('2d');
-        ramChart = new Chart(ramCtx, { type:'line', data:{ labels:[], datasets:[{ data:[], borderColor:'#FFB347', borderWidth:2, tension:0.2, fill:true, backgroundColor:'rgba(255,179,71,0.1)', pointRadius:0 }] }, options:{ responsive:true, maintainAspectRatio:true, plugins:{ legend:{ display:false } }, scales:{ y:{ min:0, grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', callback:formatRamTick, maxTicksLimit:5 } }, x:{ grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', maxRotation:45, autoSkip:true, maxTicksLimit:6 } } } } });
+        ramChart = new Chart(ramCtx, {
+            type:'line',
+            data:{ labels:[], datasets:[{ data:[], borderColor:'#FFB347', borderWidth:2, tension:0.2, fill:true, backgroundColor:'rgba(255,179,71,0.1)', pointRadius:0 }] },
+            options:{
+                responsive:true,
+                maintainAspectRatio:true,
+                plugins:{ legend:{ display:false } },
+                scales:{
+                    y:{ min:0, grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', callback:formatRamTick, maxTicksLimit:5 } },
+                    x:{ grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', maxRotation:45, autoSkip:true, maxTicksLimit:6 } }
+                }
+            }
+        });
         const netCtx = document.getElementById('netChart').getContext('2d');
-        netChart = new Chart(netCtx, { type:'line', data:{ labels:[], datasets:[{ data:[], borderColor:'#6bc5ff', borderWidth:2, tension:0.2, fill:true, backgroundColor:'rgba(107,197,255,0.1)', pointRadius:0 }, { data:[], borderColor:'#F5A0C5', borderWidth:2, tension:0.2, fill:true, backgroundColor:'rgba(245,160,197,0.1)', pointRadius:0 }] }, options:{ responsive:true, maintainAspectRatio:true, plugins:{ legend:{ display:false } }, scales:{ y:{ min:0, grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', callback:formatNetTick, maxTicksLimit:5 } }, x:{ grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', maxRotation:45, autoSkip:true, maxTicksLimit:6 } } } } });
+        netChart = new Chart(netCtx, {
+            type:'line',
+            data:{ labels:[], datasets:[
+                { data:[], borderColor:'#6bc5ff', borderWidth:2, tension:0.2, fill:true, backgroundColor:'rgba(107,197,255,0.1)', pointRadius:0 },
+                { data:[], borderColor:'#F5A0C5', borderWidth:2, tension:0.2, fill:true, backgroundColor:'rgba(245,160,197,0.1)', pointRadius:0 }
+            ] },
+            options:{
+                responsive:true,
+                maintainAspectRatio:true,
+                plugins:{ legend:{ display:false } },
+                scales:{
+                    y:{ min:0, grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', callback:formatNetTick, maxTicksLimit:5 } },
+                    x:{ grid:{ color:'rgba(255,255,255,0.055)' }, ticks:{ color:'#8b949e', maxRotation:45, autoSkip:true, maxTicksLimit:6 } }
+                }
+            }
+        });
     }
 
-    // === Пинг до Яндекс Музыки ===
+    /* ============================================================
+       ПИНГ ДО ЯНДЕКС.МУЗЫКИ (через серверный эндпоинт /api/ping)
+       ============================================================ */
+
+    /**
+     * Запрашивает у сервера задержку до music.yandex.ru.
+     * Устанавливает цвет индикатора в зависимости от порогов:
+     *   < 200 мс – зелёный (good)
+     *   200–400 мс – жёлтый (warn)
+     *   > 400 мс – красный (bad)
+     *   -1 – ошибка.
+     */
     async function pingYandexMusic() {
         try {
             const resp = await fetch('/api/ping');
@@ -641,8 +838,8 @@
             document.getElementById('pingValue').innerText = latency;
             const container = document.getElementById('pingStatusContainer');
             if (latency < 0) { container.className = 'ping-status bad'; }
-            else if (latency < 100) container.className = 'ping-status good';
-            else if (latency < 200) container.className = 'ping-status warn';
+            else if (latency < 200) container.className = 'ping-status good';
+            else if (latency < 400) container.className = 'ping-status warn';
             else container.className = 'ping-status bad';
             return latency;
         } catch(e) {
@@ -652,46 +849,263 @@
         }
     }
 
-    // === Glances API ===
-    async function fetchCPU() { try { const resp = await fetch(`${API_BASE}/4/cpu`); const data = await resp.json(); let val = Math.min(data.total, 100); animateNumber(document.getElementById('cpuPercent'), val, '%', 1); document.getElementById('cpuFill').style.width = val+'%'; return val; } catch(e) { return 0; } }
-    async function fetchLoad() { try { const resp = await fetch(`${API_BASE}/4/load`); const data = await resp.json(); document.getElementById('loadAvg').innerText = `${data.min1?.toFixed(2)||0} / ${data.min5?.toFixed(2)||0} / ${data.min15?.toFixed(2)||0}`; } catch(e) {} }
-    async function fetchMemory() { try { const resp = await fetch(`${API_BASE}/4/mem`); const data = await resp.json(); const totalBytes = data.total, usedBytes = data.used, freeBytes = data.free + data.cached; const totalFmt = formatBytes(totalBytes), usedFmt = formatBytes(usedBytes), freeFmt = formatBytes(freeBytes); animateNumber(document.getElementById('ramUsed'), usedFmt.value, ' '+usedFmt.unit, usedFmt.unit==='GB'?2:0); animateNumber(document.getElementById('ramFree'), freeFmt.value, ' '+freeFmt.unit, freeFmt.unit==='GB'?2:0); animateNumber(document.getElementById('ramTotal'), totalFmt.value, ' '+totalFmt.unit, totalFmt.unit==='GB'?2:0); document.getElementById('ramFill').style.width = (usedBytes/totalBytes*100)+'%'; return usedBytes/(1024*1024); } catch(e) { return 0; } }
-    async function fetchDisks() { try { const resp = await fetch(`${API_BASE}/4/fs`); const data = await resp.json(); const { used, free, total } = getTotalDiskUsage(data); const usedFmt = formatBytes(used), freeFmt = formatBytes(free), totalFmt = formatBytes(total); animateNumber(document.getElementById('diskUsed'), usedFmt.value, ' '+usedFmt.unit, usedFmt.unit==='GB'?2:0); animateNumber(document.getElementById('diskFree'), freeFmt.value, ' '+freeFmt.unit, freeFmt.unit==='GB'?2:0); animateNumber(document.getElementById('diskTotal'), totalFmt.value, ' '+totalFmt.unit, totalFmt.unit==='GB'?2:0); document.getElementById('diskFill').style.width = total>0 ? (used/total*100)+'%' : '0%'; } catch(e) {} }
-    async function fetchNetwork() { try { const resp = await fetch(`${API_BASE}/4/network`); const data = await resp.json(); const iface = data.find(i => i.interface_name === 'ens3'); if (iface) { const nowRx = iface.bytes_recv, nowTx = iface.bytes_sent, nowTime = Date.now(); if (prevRx !== null && prevTx !== null && lastNetFetchTime !== 0) { let dt = (nowTime - lastNetFetchTime) / 1000; if (dt > 0) { let rx = Math.max(0, (nowRx - prevRx) / dt), tx = Math.max(0, (nowTx - prevTx) / dt); if (rx > 1e9) rx = 1e9; if (tx > 1e9) tx = 1e9; updateNetSpeed(document.getElementById('rxSpeed'), document.getElementById('rxUnit'), rx); updateNetSpeed(document.getElementById('txSpeed'), document.getElementById('txUnit'), tx); prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime; return { rx, tx }; } } prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime; return { rx:0, tx:0 }; } else return { rx:0, tx:0 }; } catch(e) { return { rx:0, tx:0 }; } }
-    async function fetchSystem() { try { let osPretty = null; try { const osResp = await fetch('/os-release'); if (osResp.ok) { const osText = await osResp.text(); const match = osText.match(/PRETTY_NAME="([^"]+)"/); if (match) osPretty = match[1]; else { const nameMatch = osText.match(/NAME="([^"]+)"/), verMatch = osText.match(/VERSION_ID="([^"]+)"/); if (nameMatch && verMatch) osPretty = `${nameMatch[1]} ${verMatch[1]}`; } } } catch(e) {} const sysResp = await fetch(`${API_BASE}/4/system`); const sysData = await sysResp.json(); document.getElementById('osinfo').innerText = osPretty || sysData.linux_distro || sysData.os_name || 'Ubuntu'; document.getElementById('kernelInfo').innerText = sysData.os_version || 'Linux'; } catch(e) { document.getElementById('osinfo').innerText = 'Ubuntu 25.10'; document.getElementById('kernelInfo').innerText = '6.17.0-29-generic'; } }
-    async function fetchUptime() { try { const resp = await fetch(`${API_BASE}/4/uptime`); const data = await resp.json(); document.getElementById('serverUptime').innerText = parseUptimeToRussian(data); } catch(e) { document.getElementById('serverUptime').innerText = 'ошибка'; } }
-    async function fetchContainers() { try { const resp = await fetch(`${API_BASE}/4/containers`); const container = document.getElementById('botStatusContainer'); const text = document.getElementById('botStatusText'); if (!resp.ok) { container.className = 'bot-status offline'; text.innerText = 'Бот офлайн'; return; } const containers = await resp.json(); const bot = containers.find(c => c.name === 'bocchi_bot'); if (bot) { container.className = 'bot-status online'; text.innerText = 'Бот онлайн'; } else { container.className = 'bot-status offline'; text.innerText = 'Бот офлайн'; } } catch(e) { document.getElementById('botStatusContainer').className = 'bot-status offline'; document.getElementById('botStatusText').innerText = 'Бот офлайн'; } }
+    /* ============================================================
+       ЗАПРОСЫ К GLANCES API (с уникальным таймстампом)
+       ============================================================ */
 
-    // === Анимация свечения карточек ===
+    /**
+     * Генерирует URL с добавлением текущего timestamp для отключения кеширования.
+     */
+    function apiUrl(endpoint) {
+        return `${API_BASE}/4/${endpoint}?t=${Date.now()}`;
+    }
+
+    /**
+     * Получает загрузку CPU.
+     */
+    async function fetchCPU() {
+        try {
+            const resp = await fetch(apiUrl('cpu'));
+            const data = await resp.json();
+            let val = Math.min(data.total, 100);
+            animateNumber(document.getElementById('cpuPercent'), val, '%', 1);
+            document.getElementById('cpuFill').style.width = val+'%';
+            return val;
+        } catch(e) { return 0; }
+    }
+
+    /**
+     * Получает нагрузку системы (1, 5, 15 мин).
+     */
+    async function fetchLoad() {
+        try {
+            const resp = await fetch(apiUrl('load'));
+            const data = await resp.json();
+            document.getElementById('loadAvg').innerText =
+                `${data.min1?.toFixed(2)||0} / ${data.min5?.toFixed(2)||0} / ${data.min15?.toFixed(2)||0}`;
+        } catch(e) {}
+    }
+
+    /**
+     * Получает информацию об оперативной памяти.
+     */
+    async function fetchMemory() {
+        try {
+            const resp = await fetch(apiUrl('mem'));
+            const data = await resp.json();
+            const totalBytes = data.total, usedBytes = data.used, freeBytes = data.free + data.cached;
+            const totalFmt = formatBytes(totalBytes), usedFmt = formatBytes(usedBytes), freeFmt = formatBytes(freeBytes);
+            animateNumber(document.getElementById('ramUsed'), usedFmt.value, ' '+usedFmt.unit, usedFmt.unit==='GB'?2:0);
+            animateNumber(document.getElementById('ramFree'), freeFmt.value, ' '+freeFmt.unit, freeFmt.unit==='GB'?2:0);
+            animateNumber(document.getElementById('ramTotal'), totalFmt.value, ' '+totalFmt.unit, totalFmt.unit==='GB'?2:0);
+            document.getElementById('ramFill').style.width = (usedBytes/totalBytes*100)+'%';
+            return usedBytes/(1024*1024);
+        } catch(e) { return 0; }
+    }
+
+    /**
+     * Получает данные о дисках и отображает общее использование.
+     */
+    async function fetchDisks() {
+        try {
+            const resp = await fetch(apiUrl('fs'));
+            const data = await resp.json();
+            const { used, free, total } = getTotalDiskUsage(data);
+            const usedFmt = formatBytes(used), freeFmt = formatBytes(free), totalFmt = formatBytes(total);
+            animateNumber(document.getElementById('diskUsed'), usedFmt.value, ' '+usedFmt.unit, usedFmt.unit==='GB'?2:0);
+            animateNumber(document.getElementById('diskFree'), freeFmt.value, ' '+freeFmt.unit, freeFmt.unit==='GB'?2:0);
+            animateNumber(document.getElementById('diskTotal'), totalFmt.value, ' '+totalFmt.unit, totalFmt.unit==='GB'?2:0);
+            document.getElementById('diskFill').style.width = total>0 ? (used/total*100)+'%' : '0%';
+        } catch(e) {}
+    }
+
+    /**
+     * Получает сетевую статистику для интерфейса ens3 и вычисляет скорость входящего/исходящего трафика.
+     */
+    async function fetchNetwork() {
+        try {
+            const resp = await fetch(apiUrl('network'));
+            const data = await resp.json();
+            const iface = data.find(i => i.interface_name === 'ens3');
+            if (iface) {
+                const nowRx = iface.bytes_recv, nowTx = iface.bytes_sent, nowTime = Date.now();
+                if (prevRx !== null && prevTx !== null && lastNetFetchTime !== 0) {
+                    let dt = (nowTime - lastNetFetchTime) / 1000;
+                    if (dt > 0) {
+                        let rx = Math.max(0, (nowRx - prevRx) / dt);
+                        let tx = Math.max(0, (nowTx - prevTx) / dt);
+                        if (rx > 1e9) rx = 1e9;
+                        if (tx > 1e9) tx = 1e9;
+                        updateNetSpeed(document.getElementById('rxSpeed'), document.getElementById('rxUnit'), rx);
+                        updateNetSpeed(document.getElementById('txSpeed'), document.getElementById('txUnit'), tx);
+                        prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime;
+                        return { rx, tx };
+                    }
+                }
+                prevRx = nowRx; prevTx = nowTx; lastNetFetchTime = nowTime;
+                return { rx:0, tx:0 };
+            } else return { rx:0, tx:0 };
+        } catch(e) { return { rx:0, tx:0 }; }
+    }
+
+    /**
+     * Получает информацию об ОС и ядре.
+     * Пытается прочитать /os-release (локальный файл), затем обращается к Glances.
+     * Использует linux_distro для красивого названия ОС.
+     */
+    async function fetchSystem() {
+        try {
+            let osPretty = null;
+            try {
+                const osResp = await fetch('/os-release');
+                if (osResp.ok) {
+                    const osText = await osResp.text();
+                    const match = osText.match(/PRETTY_NAME="([^"]+)"/);
+                    if (match) osPretty = match[1];
+                    else {
+                        const nameMatch = osText.match(/NAME="([^"]+)"/);
+                        const verMatch = osText.match(/VERSION_ID="([^"]+)"/);
+                        if (nameMatch && verMatch) osPretty = `${nameMatch[1]} ${verMatch[1]}`;
+                    }
+                }
+            } catch(e) {}
+            const sysResp = await fetch(apiUrl('system'));
+            const sysData = await sysResp.json();
+            // Используем linux_distro, если доступно, иначе os_name
+            document.getElementById('osinfo').innerText = osPretty || sysData.linux_distro || sysData.os_name || 'Ubuntu 24.04';
+            document.getElementById('kernelInfo').innerText = sysData.os_version || 'Linux';
+        } catch(e) {
+            document.getElementById('osinfo').innerText = 'Ubuntu 24.04';
+            document.getElementById('kernelInfo').innerText = 'Linux';
+        }
+    }
+
+    /**
+     * Получает время работы системы (uptime) и переводит в русский текст.
+     */
+    async function fetchUptime() {
+        try {
+            const resp = await fetch(apiUrl('uptime'));
+            const data = await resp.json();
+            document.getElementById('serverUptime').innerText = parseUptimeToRussian(data);
+        } catch(e) {
+            document.getElementById('serverUptime').innerText = 'ошибка';
+        }
+    }
+
+    /**
+     * Получает список Docker-контейнеров и проверяет, запущен ли бот bocchi_bot.
+     * Обновляет статус-пилюлю "Бот онлайн/офлайн".
+     */
+    async function fetchContainers() {
+        try {
+            const resp = await fetch(apiUrl('containers'));
+            const container = document.getElementById('botStatusContainer');
+            const text = document.getElementById('botStatusText');
+            if (!resp.ok) {
+                container.className = 'bot-status offline';
+                text.innerText = 'Бот офлайн';
+                return;
+            }
+            const containers = await resp.json();
+            const bot = containers.find(c => c.name === 'bocchi_bot');
+            if (bot) {
+                container.className = 'bot-status online';
+                text.innerText = 'Бот онлайн';
+            } else {
+                container.className = 'bot-status offline';
+                text.innerText = 'Бот офлайн';
+            }
+        } catch(e) {
+            document.getElementById('botStatusContainer').className = 'bot-status offline';
+            document.getElementById('botStatusText').innerText = 'Бот офлайн';
+        }
+    }
+
+    /* ============================================================
+       АНИМАЦИЯ СВЕЧЕНИЯ КАРТОЧЕК (эффект при наведении мыши)
+       ============================================================ */
+
     function initCardShadows() {
         document.querySelectorAll('.card').forEach(card => {
             let frame = null;
-            card.addEventListener('mousemove', e => { if (frame) cancelAnimationFrame(frame); frame = requestAnimationFrame(() => { const rect = card.getBoundingClientRect(); const x = e.clientX - rect.left, y = e.clientY - rect.top; const percentX = x / rect.width, percentY = y / rect.height; const rotateY = (percentX - 0.5) * 4, rotateX = -(percentY - 0.5) * 4; const glow = Math.min(0.34, 0.16 + Math.hypot(percentX-0.5, percentY-0.5) * 0.34); card.style.setProperty('--mx', `${x}px`); card.style.setProperty('--my', `${y}px`); card.style.setProperty('--glow-alpha', glow.toFixed(3)); card.style.transform = `perspective(900px) translateY(-4px) rotateX(${rotateX}deg) rotateY(${rotateY}deg)`; card.style.boxShadow = `${rotateY * -2}px ${Math.abs(rotateX) * 2 + 18}px 65px rgba(0,0,0,0.38), 0 0 36px rgba(245,160,197,${glow*0.45}), inset 0 1px 0 rgba(255,255,255,0.07)`; }); });
-            card.addEventListener('mouseleave', () => { if (frame) cancelAnimationFrame(frame); card.style.setProperty('--mx','50%'); card.style.setProperty('--my','50%'); card.style.setProperty('--glow-alpha','0'); card.style.transform = ''; card.style.boxShadow = ''; });
+            card.addEventListener('mousemove', e => {
+                if (frame) cancelAnimationFrame(frame);
+                frame = requestAnimationFrame(() => {
+                    const rect = card.getBoundingClientRect();
+                    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+                    const percentX = x / rect.width, percentY = y / rect.height;
+                    const rotateY = (percentX - 0.5) * 4, rotateX = -(percentY - 0.5) * 4;
+                    const glow = Math.min(0.34, 0.16 + Math.hypot(percentX-0.5, percentY-0.5) * 0.34);
+                    card.style.setProperty('--mx', `${x}px`);
+                    card.style.setProperty('--my', `${y}px`);
+                    card.style.setProperty('--glow-alpha', glow.toFixed(3));
+                    card.style.transform = `perspective(900px) translateY(-4px) rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
+                    card.style.boxShadow =
+                        `${rotateY * -2}px ${Math.abs(rotateX) * 2 + 18}px 65px rgba(0,0,0,0.38), 0 0 36px rgba(245,160,197,${glow*0.45}), inset 0 1px 0 rgba(255,255,255,0.07)`;
+                });
+            });
+            card.addEventListener('mouseleave', () => {
+                if (frame) cancelAnimationFrame(frame);
+                card.style.setProperty('--mx','50%');
+                card.style.setProperty('--my','50%');
+                card.style.setProperty('--glow-alpha','0');
+                card.style.transform = '';
+                card.style.boxShadow = '';
+            });
         });
     }
 
+    /* ============================================================
+       ГЛАВНЫЙ ЦИКЛ ОБНОВЛЕНИЯ
+       ============================================================ */
+
+    /**
+     * Основная функция, которая вызывается каждые 2 секунды.
+     * Получает все данные, обновляет UI и сохраняет историю.
+     * При возникновении ошибки очищает историю, чтобы графики не "ломались".
+     */
     async function refreshData() {
-        const cpu = await fetchCPU();
-        await fetchLoad();
-        const ramMB = await fetchMemory();
-        await fetchDisks();
-        const net = await fetchNetwork();
-        await fetchSystem();
-        await fetchUptime();
-        await fetchContainers();
-        await pingYandexMusic();
-        addDataPoint(cpu, ramMB, net.rx, net.tx);
-        updateCharts();
-        saveHistory();
+        try {
+            const cpu = await fetchCPU();
+            await fetchLoad();
+            const ramMB = await fetchMemory();
+            await fetchDisks();
+            const net = await fetchNetwork();
+            await fetchSystem();
+            await fetchUptime();
+            await fetchContainers();
+            await pingYandexMusic();
+            addDataPoint(cpu, ramMB, net.rx, net.tx);
+            updateCharts();
+            saveHistory();
+        } catch(e) {
+            console.warn('Ошибка обновления данных, очищаем историю', e);
+            clearHistory();
+        }
     }
 
+    /**
+     * Инициализация при загрузке страницы.
+     */
     window.onload = () => {
         initCharts();
         initCardShadows();
+
+        // Пытаемся загрузить историю из localStorage
         if (!loadHistory()) {
-            for (let i = 0; i < MAX_POINTS; i++) { timeLabels.push(''); cpuHistory.push(0); ramHistory.push(0); rxHistory.push(0); txHistory.push(0); }
-        } else if (timeLabels.length) timeLabels[timeLabels.length-1] = getCurrentTimeLabel();
+            // Если не загрузилось – заполняем нулями
+            for (let i = 0; i < MAX_POINTS; i++) {
+                timeLabels.push('');
+                cpuHistory.push(0);
+                ramHistory.push(0);
+                rxHistory.push(0);
+                txHistory.push(0);
+            }
+        } else if (timeLabels.length) {
+            // Обновляем последнюю метку времени, чтобы она была актуальной
+            timeLabels[timeLabels.length-1] = getCurrentTimeLabel();
+        }
         updateCharts();
         refreshData();
         setInterval(refreshData, 2000);
