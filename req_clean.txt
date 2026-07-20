@@ -17,5 +17,5 @@ requests==2.34.2
 typing_extensions==4.16.0
 tzlocal==5.4.4
 urllib3==2.7.0
-yarl==1.24.5
+yarl==1.24.2
 catboxpy==0.1.1.1
