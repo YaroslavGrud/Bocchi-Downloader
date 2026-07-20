@@ -1,4 +1,4 @@
-FROM python:3.14.6-slim
+FROM python:3.14-slim-trixie
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
