@@ -58,7 +58,7 @@ echo -e "\n🐳 Сборка Docker-образа..."
 docker build -t bocchi_bot .
 
 echo -e "\n🔧 Создание docker-compose.yml с обходом AppArmor..."
-cat > docker-compose.yml <<EOF
+cat > docker-compose.yml <<EOL
 services:
   bocchi-bot:
     image: bocchi_bot
@@ -74,7 +74,7 @@ services:
     command: python3 /app/bocchi_bot_host.py
     security_opt:
       - apparmor=unconfined
-EOF
+EOL
 
 echo -e "\n🔄 Очистка старых контейнеров..."
 docker stop bocchi-bot 2>/dev/null || true
@@ -91,3 +91,6 @@ echo -e "\n📋 Логи: docker logs -f bocchi-bot"
 echo -e "🛑 Остановка: docker stop bocchi-bot"
 echo -e "▶️  Запуск: docker start bocchi-bot"
 echo -e "💾 Данные на хосте: $WORKDIR/data"
+echo -e "\n🔁 Для переключения версий используйте:"
+echo -e "   • Стабильная: ./switch_to_stable.sh"
+echo -e "   • Бета:       ./switch_to_beta.sh"
