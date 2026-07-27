@@ -8,7 +8,6 @@ NC='\033[0m'
 WORKDIR="$HOME/bocchi_bot"
 REPO_URL="https://github.com/YaroslavGrud/Bocchi-Downloader.git"
 BRANCH="Yaroslav_grud"
-BOCCHI_UID=1000
 
 echo -e "${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}        🚀 BOCCHI DOWNLOADER — АВТО-УСТАНОВКА         ${NC}"
@@ -39,58 +38,45 @@ echo -e "${GREEN}✅ .env создан (режим beta)${NC}"
 
 echo -e "\n📂 Настройка папки для данных..."
 mkdir -p "$WORKDIR/data"
-if [ "$EUID" -eq 0 ]; then
-    chown -R "$BOCCHI_UID:$BOCCHI_UID" "$WORKDIR/data"
-    echo -e "${GREEN}✅ Права на data исправлены.${NC}"
-else
-    echo -e "${RED}⚠️ Запустите скрипт с sudo для автоматической настройки прав.${NC}"
-    printf "Нажмите Enter после исправления прав... "
-    read -r
-fi
+BOCCHI_UID=1000
 
-if [ ! -f active_status_msgs.json ]; then
-    echo '{}' > active_status_msgs.json
-    chmod 666 active_status_msgs.json
-    echo -e "${GREEN}✅ active_status_msgs.json создан.${NC}"
+CURRENT_OWNER=$(stat -c "%u" "$WORKDIR/data" 2>/dev/null || echo "")
+if [ "$CURRENT_OWNER" != "$BOCCHI_UID" ]; then
+    if [ "$EUID" -eq 0 ]; then
+        chown -R "$BOCCHI_UID:$BOCCHI_UID" "$WORKDIR/data"
+        echo -e "${GREEN}✅ Права на data исправлены.${NC}"
+    else
+        echo -e "${RED}⚠️ Запустите скрипт с sudo для автоматической настройки прав,${NC}"
+        echo "   либо выполните: sudo chown -R $BOCCHI_UID:$BOCCHI_UID $WORKDIR/data"
+        printf "Нажмите Enter после исправления прав... "
+        read -r
+    fi
 fi
 
 echo -e "\n🐳 Сборка Docker-образа..."
 docker build -t bocchi_bot .
 
-echo -e "\n🔧 Создание docker-compose.yml с обходом AppArmor..."
-cat > docker-compose.yml <<EOL
-services:
-  bocchi-bot:
-    image: bocchi_bot
-    container_name: bocchi-bot
-    restart: unless-stopped
-    volumes:
-      - ./data:/app/data
-      - ./active_status_msgs.json:/app/active_status_msgs.json
-    environment:
-      - TELEGRAM_TOKEN=\${TELEGRAM_TOKEN}
-      - BOT_MODE=\${BOT_MODE:-stable}
-    entrypoint: []
-    command: python3 /app/bocchi_bot_host.py
-    security_opt:
-      - apparmor=unconfined
-EOL
-
 echo -e "\n🔄 Очистка старых контейнеров..."
-docker stop bocchi-bot 2>/dev/null || true
-docker rm bocchi-bot 2>/dev/null || true
+docker stop bocchi_bot 2>/dev/null || true
+docker rm bocchi_bot 2>/dev/null || true
 
-echo -e "\n🚀 Запуск контейнера через docker compose..."
-docker compose down 2>/dev/null || true
-docker compose up -d
+echo -e "\n🚀 Запуск контейнера..."
+docker run -d \
+    --name bocchi_bot \
+    --restart unless-stopped \
+    --user "$BOCCHI_UID:$BOCCHI_UID" \
+    --env-file .env \
+    -v "$WORKDIR/data:/app/data" \
+    --tmpfs /tmp \
+    --tmpfs /var/tmp \
+    --security-opt no-new-privileges:true \
+    bocchi_bot
+# Флаг --read-only удалён
 
 echo -e "\n${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║              ✅ БОТ УСПЕШНО ЗАПУЩЕН!                 ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
-echo -e "\n📋 Логи: docker logs -f bocchi-bot"
-echo -e "🛑 Остановка: docker stop bocchi-bot"
-echo -e "▶️  Запуск: docker start bocchi-bot"
+echo -e "\n📋 Логи: docker logs -f bocchi_bot"
+echo -e "🛑 Остановка: docker stop bocchi_bot"
+echo -e "▶️  Запуск: docker start bocchi_bot"
 echo -e "💾 Данные на хосте: $WORKDIR/data"
-echo -e "\n🔁 Для переключения версий используйте:"
-echo -e "   • Стабильная: ./switch_to_stable.sh"
-echo -e "   • Бета:       ./switch_to_beta.sh"
