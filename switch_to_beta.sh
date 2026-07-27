@@ -65,7 +65,7 @@ docker run -d \
   -v "$(pwd)/data:/app/data" \
   --tmpfs /tmp \
   --tmpfs /var/tmp \
-  --security-opt no-new-privileges:true \
+  --security-opt apparmor=unconfined \
   yaroslavgrud/bocchi-downloader-server-edition:latest
 
 echo "✅ Бот запущен в бета-режиме"
