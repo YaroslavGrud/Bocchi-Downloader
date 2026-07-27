@@ -2,6 +2,8 @@
 # Shell-скрипты для управления ботом
 
 > [!Warning]
+>> ## Примечание
+>> Оставлено как историческая справка. На данный момент работоспособность функционала в предупреждении неизвестна.
 > ## Пользователь внутри контейнера
 >
 > Для безопасности бот работает внутри контейнера **не от root**, а от непривилегированного пользователя `bocchi`.  
@@ -69,8 +71,10 @@ curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaro
 *   Показывает логи бота
 
 ## Переключение версий
+> [!Warning]
+> Выяснилось, что стабильная версия работает куда хуже, чем бета. Рекомендуется использовать бета-сборку.
 
-### 3. Стабильная версия
+### 3. Стабильная версия (на данный момент нестабильна (читайте выше)).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/switch_to_stable.sh -o switch_to_stable.sh && bash switch_to_stable.sh
@@ -83,7 +87,7 @@ curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaro
 *   Перезапускает контейнер через `docker compose down && docker compose up -d`
 *   Запускается `bocchi_bot_host.py`
 
-### 4. Бета-версия (нестабильная)
+### 4. Бета-версия
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/switch_to_beta.sh -o switch_to_beta.sh && bash switch_to_beta.sh
