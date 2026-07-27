@@ -138,8 +138,34 @@ curl -o /var/www/dashboard/index.html https://raw.githubusercontent.com/Yaroslav
 ```bash
 ufw allow 61209/tcp
 ```
+### 6 Пинг серверов Яндекс.Музыки
 
-### 6️⃣ Проверка
+```bash
+cat > /etc/systemd/system/ping_server.service <<'EOF'
+[Unit]
+Description=Ping server for Bocchi Dashboard
+After=network.target
+
+[Service]
+WorkingDirectory=/root/bocchi_bot
+ExecStart=/usr/bin/python3 /root/bocchi_bot/ping_server.py
+Restart=always
+RestartSec=10
+User=root
+Group=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable ping_server.service
+systemctl start ping_server.service
+```
+
+### 7 Проверка
 
 Откройте браузер по адресу: `http://<IP-вашего-сервера>:61209`
 
