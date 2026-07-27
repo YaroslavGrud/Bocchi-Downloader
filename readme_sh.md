@@ -55,22 +55,6 @@ curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaro
 *   Собирает Docker-образ
 *   Запускает контейнер
 
-> [!Tip]
-> Если Возникает ошибка `operation not permitted` или `[Errno 13] Permission denied` выполнить
-```bash
-docker stop bocchi_bot
-docker rm bocchi_bot
-
-docker run -d \
-  --name bocchi_bot \
-  -v /root/bocchi_bot:/app \
-  --entrypoint /app/entrypoint.sh \
-  bocchi_bot
-  ```
-
-
-
-
 ### 2\. Перезапуск бота
 
 ```bash
