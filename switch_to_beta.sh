@@ -1,4 +1,3 @@
-cat > /root/switch_to_beta_fixed.sh << 'EOF'
 #!/bin/bash
 set -e
 
@@ -98,6 +97,3 @@ docker run -d \
 
 echo "✅ Бот запущен в бета-режиме (локальный образ)"
 echo "📋 Логи: docker logs -f $CONTAINER_NAME"
-EOF
-
-chmod +x /root/switch_to_beta_fixed.sh
