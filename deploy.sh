@@ -69,7 +69,7 @@ docker run -d \
     -v "$WORKDIR/data:/app/data" \
     --tmpfs /tmp \
     --tmpfs /var/tmp \
-    --security-opt no-new-privileges:true \
+    --security-opt apparmor=unconfined \
     bocchi_bot
 # Флаг --read-only удалён
 
