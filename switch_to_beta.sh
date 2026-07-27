@@ -1,10 +1,12 @@
+cat > /root/switch_to_beta_fixed.sh << 'EOF'
 #!/bin/bash
 set -e
 
-cd "$(dirname "$0")" || { echo "❌ Ошибка перехода в директорию скрипта"; exit 1; }
+cd "$(dirname "$0")" || { echo "❌ Ошибка перехода в директорию"; exit 1; }
 
-echo "=== Переключение на БЕТА-версию ==="
+echo "=== Переключение на БЕТА-версию (локальный образ) ==="
 
+# ---- Работа с .env ----
 ENV_FILE=""
 if [ -f .env ]; then
     ENV_FILE=".env"
@@ -44,29 +46,58 @@ else
     done
 fi
 
+# Сохраняем .env (режим beta)
 cat > "$ENV_FILE" <<EOF
 TELEGRAM_TOKEN=${new_token}
 BOT_MODE=beta
 EOF
 echo "✅ Режим: beta"
 
+# ---- Проверка и сборка локального образа ----
+if ! docker images | grep -q "^bocchi_bot"; then
+    echo "⚠️ Локальный образ bocchi_bot не найден. Собираем..."
+    if [ ! -f Dockerfile ]; then
+        echo "📥 Клонируем репозиторий..."
+        git clone https://github.com/YaroslavGrud/Bocchi-Downloader.git .
+        git checkout Yaroslav_grud
+    fi
+    docker build -t bocchi_bot .
+else
+    echo "✅ Образ bocchi_bot уже существует."
+fi
+
+# ---- Остановка и удаление старого контейнера ----
 CONTAINER_NAME="bocchi_bot"
 echo "♻️  Останавливаем старый контейнер..."
 docker stop "$CONTAINER_NAME" 2>/dev/null || true
 docker rm "$CONTAINER_NAME" 2>/dev/null || true
 
-echo "🚀 Запускаем новый контейнер..."
+# ---- Создаём папку data и выставляем права для пользователя bocchi (UID 1000) ----
+mkdir -p "$(pwd)/data"
+chown -R 1000:1000 "$(pwd)/data"
+chmod 755 "$(pwd)/data"
+
+# Создаём файл active_status_msgs.json, если нет
+if [ ! -f "active_status_msgs.json" ]; then
+    echo '{}' > active_status_msgs.json
+fi
+chmod 666 active_status_msgs.json
+
+# ---- Запуск контейнера ----
+echo "🚀 Запускаем новый контейнер (локальный образ)..."
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
-  --user 1000:1000 \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/active_status_msgs.json:/app/active_status_msgs.json" \
   -e TELEGRAM_TOKEN="${new_token}" \
   -e BOT_MODE=beta \
-  -v "$(pwd)/data:/app/data" \
-  --tmpfs /tmp \
-  --tmpfs /var/tmp \
+  --user 1000:1000 \
   --security-opt no-new-privileges:true \
-  yaroslavgrud/bocchi-downloader-server-edition:latest
+  bocchi_bot
 
-echo "✅ Бот запущен в бета-режиме"
-echo "Логи: docker logs -f $CONTAINER_NAME"
+echo "✅ Бот запущен в бета-режиме (локальный образ)"
+echo "📋 Логи: docker logs -f $CONTAINER_NAME"
+EOF
+
+chmod +x /root/switch_to_beta_fixed.sh
