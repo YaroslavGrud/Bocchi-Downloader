@@ -102,6 +102,12 @@ server {
         rewrite ^/api/(.*) /api/$1 break;
     }
 
+    location /api/ping {
+        proxy_pass http://127.0.0.1:61210/ping;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
     location /os-release {
         alias /etc/os-release;
         default_type text/plain;
