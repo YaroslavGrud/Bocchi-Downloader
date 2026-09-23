@@ -9,15 +9,15 @@ idna==3.19
 multidict==6.8.0
 mutagen==1.48.1
 pillow==12.3.0
-propcache==0.5.2
+propcache==0.5.4
 psutil==7.2.2
 python-dotenv==1.2.3
 python-telegram-bot==22.8
 requests==2.34.2
 typing_extensions==4.16.0
 tzlocal==5.4.4
-urllib3==2.7.0
-yarl==1.24.5
+urllib3==2.8.0
+yarl==1.25.1
 catboxpy==0.1.1.1
 # yandex-music-downloader из конкретного архива (форк)
 yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/refs/tags/v3.5.5.zip
