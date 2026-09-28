@@ -91,7 +91,6 @@ MIN_FREE_DISK_MB = int(os.getenv("MIN_FREE_DISK_MB", "20"))
 TRACK_DELAY_SECONDS = float(os.getenv("TRACK_DELAY_SECONDS", "5.0"))
 STUCK_TIMEOUT = int(os.getenv("STUCK_TIMEOUT", "120"))
 ACCUMULATION_DELAY = float(os.getenv("ACCUMULATION_DELAY", "5.0"))
-LINK_SUBMIT_COOLDOWN = float(os.getenv("LINK_SUBMIT_COOLDOWN", "30"))
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
 MAX_TRACKS_PER_USER = int(os.getenv("MAX_TRACKS_PER_USER", "50"))
 MONITORING_URL = os.getenv("MONITORING_URL", "http://185.170.153.38:61209")
@@ -127,7 +126,6 @@ user_tokens = {}
 active_status_msgs = {}
 pending_tasks = {}
 current_task_info = {}
-user_link_last_submit = {}
 user_queue_count = {}
 
 # ---------------------- СОСТОЯНИЯ ДИАЛОГА ----------------------
@@ -1066,23 +1064,7 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔑 Т-требуется авторизация. Используй /start или кнопку «🎵 Начать работу»."
             )
         return WAITING_FOR_TOKEN
-
-    # Per-user cooldown на отправку ссылок
-    now = time.time()
-    last_submit = user_link_last_submit.get(user_id, 0)
-    if now - last_submit < LINK_SUBMIT_COOLDOWN:
-        remaining_sec = int(LINK_SUBMIT_COOLDOWN - (now - last_submit))
-        await context.bot.send_message(
-            chat_id,
-            f"⏳ П-подожди {remaining_sec} сек. перед отправкой новых ссылок... п-пожалуйста."
-        )
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        return WAITING_FOR_LINK
-    user_link_last_submit[user_id] = now
-
+        
     content = text + " " + (update.message.caption or "")
     url_pattern = re.compile(r'https?://(?:[a-z0-9-]+\.)*yandex\.[a-z]{2,3}(?:/music)?(?:/[^\s]+)?', re.IGNORECASE)
     urls = url_pattern.findall(content)
