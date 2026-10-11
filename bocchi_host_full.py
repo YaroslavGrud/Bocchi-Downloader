@@ -1475,7 +1475,7 @@ async def worker_loop(app, worker_id):
                                 "--quality", str(quality),
                                 "--embed-cover",
                                 "--cover-resolution", "original",
-                                "--lyrics-format", "lrc",
+                                "--lyrics-format", os.getenv("LYRICS_FORMAT", "none"),
                                 "--dir", str(tmp_path),
                                 "--url", task['url'],
                                 "--path-pattern", "#artist - #title",
