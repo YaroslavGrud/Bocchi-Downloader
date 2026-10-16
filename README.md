@@ -220,7 +220,7 @@ bocchi_env/bin/python bocchi_bot_android.py
 
 | Проект | Автор |
 |--------|-------|
-| [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) | Команда разработчиков проекта неизвестна |
+| [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) | Команда разработчиков проекта представлена в [AUTHORS.rst](https://github.com/python-telegram-bot/python-telegram-bot/blob/master/AUTHORS.rst) проекта |
 
 ### 📦 Проекты, без которых нам не обойтись
 
