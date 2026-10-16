@@ -250,7 +250,7 @@ bocchi_env/bin/python bocchi_bot_android.py
 
 | Кто | За что |
 |-----|--------|
-| <img src="https://imgproxy.attic.sh/insecure/f:png/plain/https://attic.sh/27h4pxfcp6cbt1lastychrpt69a9" width="20" height="20" alt="emoji"> Одна из авторов проекта и его тестировщица, которая предпочла остаться анонимной | Вдохновение для разработки бота пришло именно от неё. |
+| <div align="center"><img src="https://imgproxy.attic.sh/insecure/f:png/plain/https://attic.sh/jv943f5odtpolvryxbw81hut8rqx" width="100" height="100" alt="emoji"><br>Nero</div> | Идею создания бота вдохновила она, первая из тестировщиков. |
 | 🧡 [MarshalX](https://github.com/MarshalX) | Создание [Yandex Music API](https://github.com/MarshalX/yandex-music-api) — фундамент, на котором держится вся интеграция с Яндекс.Музыкой |
 | 🌿 [llistochek](https://github.com/llistochek) | Создание [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) - фундамент, на котором держится загрузка музыки с серверов Яндекс.Музыки |
 | 💚 [Serv.Host](https://serv.host/) | Поддержка проекта на всём этапе разработки в качестве площадки для размещения проекта а также предоставленный фирменный мерч |
