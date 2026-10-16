@@ -2,13 +2,17 @@
 Загрузчик музыки из сервиса "Яндекс.Музыка" в высоком качестве [с поддержкой CLI](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/ReadmeCLI.md)
 
 > [!CAUTION]
-> Ваш токен Яндекс.Музыки может быть [виден на сервере](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/SECURITY.md)
+> Для загрузки контента применяется токен Яндекс.Музыки вашего аккаунта. \
+> Ответственность за его передачу лежит на Вас, а не на авторе проекта.
+>
+> ![Вас об этом предупредили!](https://img.shields.io/badge/%D0%92%D0%B0%D1%81%20%D0%BE%D0%B1%20%D1%8D%D1%82%D0%BE%D0%BC%20%D0%BF%D1%80%D0%B5%D0%B4%D1%83%D0%BF%D1%80%D0%B5%D0%B4%D0%B8%D0%BB%D0%B8!-red?style=for-the-badge)
 
 > [!NOTE]
-> ## Технические неполадки на серверах Яндекса (актуально на 11.10.2026)
+> ## Технические неполадки на серверах Яндекса
 > Бот функционирует в ограниченном режиме. Некоторые его возможности могут быть недоступны. \
 > Сбой вызван техническими проблемами на стороне Яндекса, включая [недоступность серверов](https://status.yandex.cloud/ru/dashboard).
-
+> 
+> Когда обстоятельства изменятся, проект вновь будет функционировать в обычном режиме
 
 > [!WARNING]
 > ## Разработчик просит Вас не злоупотреблять ресурсами бота
@@ -16,26 +20,35 @@
 > 
 > Мы относимся к каждому пользователю с вниманием и обеспечиваем все необходимые инструменты. Тем не менее, хотим напомнить, что при использовании уязвимостей мы можем ограничить доступ к боту или полностью его прекратить.
 
-> [!WARNING]
+> [!TIP]
+> Если вы столкнулись с проблемой, сообщите о ней
 > 
-> Бот столкнулся с масштабными изменениями в своей логике, что могло привести к нестабильной работе некоторых функций. \
-> Если вы столкнулись с проблемой, [сообщите о ней](https://github.com/YaroslavGrud/Bocchi-Downloader/issues) 
+> [![Сообщить о проблеме](https://img.shields.io/badge/%D0%A1%D0%BE%D0%BE%D0%B1%D1%89%D0%B8%D1%82%D1%8C%20%D0%BE%20%D0%BF%D1%80%D0%BE%D0%B1%D0%BB%D0%B5%D0%BC%D0%B5-%E2%86%92-0969da?style=for-the-badge)](https://github.com/YaroslavGrud/Bocchi-Downloader/issues)
 
-Спасибо за ваше терпение и помощь в улучшении проекта!
+---
 
-## 📌 Состояние проекта
+## ✨ Возможности проекта
+
+- 🎵 **Загрузка треков** по ссылкам (одиночные треки и альбомы)
+- 📝 **Синхронизированный текст** песен в формате LRC (с таймкодами)
+- 🏷️ **Богатые метаданные** (исполнитель, альбом, год, жанр)
+- 🖼️ **Высококачественные обложки**
+- 📊 **Мониторинг состояния** (поддерживается не во всех версиях)
+- 🔄 **Обработка альбомов** с автоматическим разбиением на треки
+- 🚀 **Очередь загрузок** для стабильной работы
+
+## 📌 Состояние
 
 | Показатель | Бейдж                                                                                                                   |
 |------------|-------------------------------------------------------------------------------------------------------------------------|
 | Язык       | [![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)](https://www.python.org/)              |
 | Лицензия   | [![License: NonCommercial](https://img.shields.io/badge/License-NonCommercial-red?logo=gavel&logoColor=white)](LICENSE) |
 
-## 🔗 Доступ к дашбордам
+## 📊 Дашборд
 
 | Интерфейс                                    | Бейдж                                                                                                     |
 |----------------------------------------------|-----------------------------------------------------------------------------------------------------------|
-| **Bocchi Dashboard** (кастомный, порт 61209) | [![Bocchi Dashboard](https://img.shields.io/badge/Bocchi_Dashboard-ff69b4)](http://185.170.153.38:61209/) |
-| **Glances Web UI** (легаси, порт 61208)      | [![Glances Web UI](https://img.shields.io/badge/Glances_UI-4c8c4c)](http://185.170.153.38:61208/)         |
+| **Bocchi Dashboard** | [![Bocchi Dashboard](https://img.shields.io/badge/Bocchi_Dashboard-ff69b4)](http://185.170.153.38:61209/) |
 
 ## 🐳 Серверная сборка (Docker)
 
@@ -50,18 +63,8 @@
 
 | Режим      | Бейдж                                                                                                                                                                          |
 |------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Стабильная | [![Stable bot](https://img.shields.io/badge/bocchi__bot__host.py-стабильный-success)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/bocchi_bot_host.py) |
-| Бета       | [![Beta bot](https://img.shields.io/badge/bocchi__host__full.py-бета-orange)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/bocchi_host_full.py)        |
-
-## 🖥️ Десктопные и мобильные версии
-
-| Платформа           | Бейдж                                                                                                                                                                                                                                     |
-|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Windows             | [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_windows.py)                    |
-| CLI (консоль)       | [![CLI](https://img.shields.io/badge/CLI-4D4D4D?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_CLI.py)                                                  |
-| Raspberry Pi        | [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-C51A4A?logo=raspberrypi&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_raspberry.py)                    |
-| Raspberry Pi Legacy | [![Raspberry Pi Legacy](https://img.shields.io/badge/Raspberry_Pi_Legacy-C51A4A?logo=raspberrypi&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_Legacy_bot_raspberry.py) |
-| Android             | [![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py)                                      |
+| Бета       | [![Beta bot](https://img.shields.io/badge/bocchi__bot__host.py-бета-orange)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/bocchi_bot_host.py)          |
+| Стабильная | [![Stable bot](https://img.shields.io/badge/bocchi__host__full.py-стабильный-success)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/bocchi_host_full.py) |
 
 ## 🛠️ Управление и документация
 
@@ -73,17 +76,23 @@
 | Перезапуск (restart) | [![restart.sh](https://img.shields.io/badge/restart.sh-перезапуск-orange?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/restart.sh)      |
 | Очистка (clean)      | [![clean.sh](https://img.shields.io/badge/docker_clean.sh-очистка-C51A4A?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/docker_clean.sh) |
 
-## ✨ Возможности
+## 📜 Устаревшая часть проекта
 
-- 🎵 **Загрузка треков** по ссылкам (одиночные треки и альбомы)
-- 📝 **Синхронизированный текст** песен в формате LRC (с таймкодами)
-- 🏷️ **Богатые метаданные** (исполнитель, альбом, год, жанр)
-- 🖼️ **Высококачественные обложки**
-- ⏱️ **Корректная длительность** треков в Telegram
-- 📊 **Мониторинг состояния** (поддерживается не во всех версиях)
-- 🔄 **Обработка альбомов** с автоматическим разбиением на треки
-- 🚀 **Очередь загрузок** для стабильной работы
-- 🛡️ **Защита от ошибок** и тайм-аутов
+> [!NOTE]
+> Некоторые разделы переведены в **историческую справку**. Инструкция оставлена для тех, кто запускает старые версии бота.
+
+<details>
+<summary><b>Показать устаревшую инструкцию</b></summary>
+
+## 🖥️ Десктопные и мобильные версии
+
+| Платформа           | Бейдж                                                                                                                                                                                                                                     |
+|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Windows             | [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_windows.py)                    |
+| CLI (консоль)       | [![CLI](https://img.shields.io/badge/CLI-4D4D4D?logo=gnubash&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_CLI.py)                                                  |
+| Raspberry Pi        | [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-C51A4A?logo=raspberrypi&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_raspberry.py)                    |
+| Raspberry Pi Legacy | [![Raspberry Pi Legacy](https://img.shields.io/badge/Raspberry_Pi_Legacy-C51A4A?logo=raspberrypi&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_Legacy_bot_raspberry.py) |
+| Android             | [![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white)](https://github.com/YaroslavGrud/Bocchi-Downloader/blob/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py)                                      |
 
 ## 📋 Требования
 
@@ -111,10 +120,7 @@ pip install ".[async]" # с поддержкой асинхронного кли
 ```
 
 ## 🤖 Установка бота под Android
-
-> [!WARNING]
-> 
-> Эта часть проекта может не содержать возможностей предоставленных в серверных решениях бота
+Эта часть проекта может не содержать возможностей предоставленных в серверных решениях бота
 
 ```bash
 termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install python ffmpeg git binutils wget -y && pip install -U https://github.com/llistochek/yandex-music-downloader/archive/main.zip && python -m venv bocchi_env && bocchi_env/bin/pip install setuptools wheel && bocchi_env/bin/pip install python-telegram-bot[job-queue] catboxpy mutagen requests python-dotenv yandex-music && wget -O bocchi_bot_android.py https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_android.py && read -p "Введите токен Telegram бота: " TOKEN && echo "TELEGRAM_TOKEN=$TOKEN" > .env.example && bocchi_env/bin/python bocchi_bot_android.py
@@ -125,6 +131,7 @@ termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install python ff
 ```bash
 bocchi_env/bin/python bocchi_bot_android.py
 ```
+</details>
 
 ## 🎮 Использование
 
@@ -171,7 +178,7 @@ bocchi_env/bin/python bocchi_bot_android.py
 
 - **Одиночные треки** → загружаются как есть
 - **Альбомы** → автоматически разбиваются на отдельные треки
-- **Плейлисты** → автоматически разбиваются на отдельные треки (Спасибо [MarshalX](https://github.com/MarshalX))
+- **Плейлисты** → автоматически разбиваются на отдельные треки (Спасибо 🧡[MarshalX](https://github.com/MarshalX))
 
 
 ### Формат вывода
@@ -185,6 +192,7 @@ bocchi_env/bin/python bocchi_bot_android.py
 
 1. Litterbox – временное хранилище (ссылка действует 24 часа)
 2. Catbox – постоянное хранилище (резервный вариант)
+3. Сервис [/tmp/files](https://tmpfiles.org) если другие не отвечают
 
 Ссылки приходят в чат и файл можно скачать по ним.
 
@@ -203,27 +211,53 @@ bocchi_env/bin/python bocchi_bot_android.py
 > ### Нет текста песни
 > - Убедитесь, что для трека есть текст на Яндекс.Музыке
 > - Проверьте, что загрузчик запускается с параметром `--lyrics-format lrc`
+
 ---
+
+## 🎧 Из чего собран бот
+
+### 🐍 Основная работа
+
+| Проект | Автор |
+|--------|-------|
+| [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) | Команда разработчиков проекта неизвестна |
+
+### 📦 Проекты, без которых нам не обойтись
+
+| Проект | Автор |
+|--------|-------|
+| [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) | 🌿 [llistochek](https://github.com/llistochek) |
+| [Yandex Music API](https://github.com/MarshalX/yandex-music-api) | 🧡 [MarshalX](https://github.com/MarshalX) |
+
+### ☁️ Отправка в облако
+
+| Проект | Автор |
+|--------|-------|
+| [catboxpy](https://github.com/anshonweb/catboxpy) | ☁️ [anshonweb](https://github.com/anshonweb) |
+| [/tmp/files](https://tmpfiles.org) | Неизвестен |
+
+### 🖥 Серверные решения
+
+| Проект | Автор |
+|--------|-------|
+| 💚 [Serv.Host](https://serv.host/) | Команда Serv.Host |
+| [Bothost](https://bothost.ru/) (сейчас не используется)| Команда Bothost |
+---
+
+## 🏆 Особые благодарности
+
+Здесь мы хотим отдельно отметить людей и компании, чей вклад в проект вышел за рамки обычного «спасибо».
+
+| Кто | За что |
+|-----|--------|
+| <img src="https://imgproxy.attic.sh/insecure/f:png/plain/https://attic.sh/27h4pxfcp6cbt1lastychrpt69a9" width="20" height="20" alt="emoji"> Одна из авторов проекта и его тестировщица, которая предпочла остаться анонимной | Вдохновение для разработки бота пришло именно от неё. |
+| 🧡 [MarshalX](https://github.com/MarshalX) | Создание [Yandex Music API](https://github.com/MarshalX/yandex-music-api) — фундамент, на котором держится вся интеграция с Яндекс.Музыкой |
+| 🌿 [llistochek](https://github.com/llistochek) | Создание [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) - фундамент, на котором держится загрузка музыки с серверов Яндекс.Музыки |
+| 💚 [Serv.Host](https://serv.host/) | Поддержка проекта на всём этапе разработки в качестве площадки для размещения проекта а также предоставленный фирменный мерч |
+| 🐋 [Docker](https://www.docker.com/) | Контейнеризация и развёртывание |
+| 🛠️ Тестировщики | Участие в тестировании функционала и обратную связь, которая помогала делать бота лучше |
+| 🤖 AI-ассистенты | Помощь в отладке кода, исправлении ошибок и рефакторинге проблемных участков проекта |
+| ☕ **Вам** | За то, что дочитали эту страницу до конца и, возможно, пользуетесь функциями нашего проекта. Для нас очень важно ваше внимание и участие |
 
 ## 📝 Лицензия
 Проект распространяется под некоммерческой лицензией. Подробности в файле [LICENSE](LICENSE).
-
-## 🙏 Благодарности
-- [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) — мощная библиотека для Telegram ботов
-
-### Основная работа
-- [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) — основной загрузчик Яндекс.Музыки
-- [MarshalX](https://github.com/MarshalX) - обновлённый API и поддержка плейлистов
-
-### Отправка в облако
-- [catboxpy](https://github.com/anshonweb/catboxpy) — обёртка для Catbox/Litterbox
-
-### Серверные решения
-- [Bothost](https://bothost.ru/)
-- [Serv.Host](https://serv.host/)
-
-### Особые благодарности
-- Человеку, что подал идею создать бота (спасибо Yume)
----
-
-⭐ **Если вам понравился проект, поставьте звезду на GitHub!**
