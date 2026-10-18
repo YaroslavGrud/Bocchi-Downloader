@@ -11,6 +11,7 @@ env:
 permissions:
   contents: read
   security-events: write
+  actions: read          # нужно CodeQL для чтения метаданных workflow
 
 jobs:
   codeql:
@@ -32,53 +33,67 @@ jobs:
     name: Semgrep
     runs-on: ubuntu-latest
     container:
-      image: returntocorp/semgrep
+      # Официальный образ. Можно заменить тег на конкретную версию для воспроизводимости.
+      image: semgrep/semgrep:1.180.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
       - name: Запуск Semgrep
-        continue-on-error: true
+        # Без continue-on-error: реальный сбой Semgrep = падение job с понятной ошибкой
         run: |
-          semgrep ci \
+          semgrep scan \
             --config=auto \
             --sarif \
             --output=semgrep.sarif \
-            --verbose \
-            || true
+            --verbose
+
+      - name: Резервный пустой SARIF при сбое сканирования
+        if: failure()
+        run: |
           if [ ! -f semgrep.sarif ]; then
             echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[]}' > semgrep.sarif
           fi
+
       - name: Загрузка SARIF в GitHub Security
+        if: always()
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
         with:
           sarif_file: semgrep.sarif
+          category: semgrep
 
   python-checks:
     name: Python анализ
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: '3.14'
+          python-version: '3.13'   # 3.13 стабильнее в setup-python; верните '3.14', если уверены
 
       - name: Установка инструментов
         run: pip install pip-audit bandit flake8 vulture yamllint
 
       - name: Аудит зависимостей (pip-audit)
         continue-on-error: true
-        run: pip-audit -r requirements.txt
+        run: |
+          if [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt
+          else
+            echo "requirements.txt не найден — шаг пропущен"
+          fi
 
       - name: Поиск мёртвого кода (vulture)
         continue-on-error: true
-        run: vulture . --min-confidence 80 || true
+        run: vulture . --min-confidence 80
 
       - name: Линтер стиля (flake8)
         continue-on-error: true
-        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exit-zero
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
       - name: Проверка безопасности кода (bandit)
         continue-on-error: true
-        run: bandit -r . -ll -f custom --exit-zero
+        run: bandit -r . -ll
 
       - name: Линтер YAML-файлов (yamllint)
         continue-on-error: true
@@ -89,7 +104,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387
+
+      - name: Проверка наличия Dockerfile
+        id: check
+        run: |
+          if [ -f Dockerfile ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Dockerfile не найден — шаг hadolint будет пропущен"
+          fi
+
+      - name: Hadolint
+        if: steps.check.outputs.exists == 'true'
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387
         continue-on-error: true
         with:
           dockerfile: Dockerfile
@@ -101,28 +129,46 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # gitleaks нужна история коммитов
+
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Для организаций может потребоваться GITLEAKS_LICENSE
+          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
   extra-checks:
     name: Лицензии и JSON
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: '3.14'
+          python-version: '3.13'
+
       - name: Проверка лицензий зависимостей
         continue-on-error: true
         run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
           pip install pip-licenses
           pip-licenses --allow-only="MIT License;Apache License 2.0;BSD License;Python Software Foundation License;Mozilla Public License 2.0"
+
       - name: Валидация JSON файлов
         continue-on-error: true
         run: |
-          for f in $(find . -name "*.json"); do
-            python -m json.tool "$f" > /dev/null || echo "Invalid JSON: $f"
+          invalid=0
+          for f in $(find . -name "*.json" -not -path "./node_modules/*" -not -path "./.git/*"); do
+            if ! python -m json.tool "$f" > /dev/null 2>&1; then
+              echo "Invalid JSON: $f"
+              invalid=$((invalid + 1))
+            fi
           done
+          if [ "$invalid" -gt 0 ]; then
+            echo "Найдено невалидных JSON: $invalid"
+            exit 1
+          fi
+          echo "Все JSON-файлы валидны"
