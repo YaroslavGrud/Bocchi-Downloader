@@ -8,7 +8,7 @@ frozenlist==1.8.0
 idna==3.20
 multidict==7.1.0
 mutagen==1.48.1
-pillow==12.3.0
+pillow==13.0.0
 propcache==0.5.4
 psutil==7.2.2
 python-dotenv==1.2.4
