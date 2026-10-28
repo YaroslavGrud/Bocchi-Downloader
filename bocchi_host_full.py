@@ -1088,8 +1088,8 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         try:
             await message.delete()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение при превышении лимита: {e}")
         return WAITING_FOR_LINK
 
     link_accumulators.setdefault(user_id, []).extend(valid_urls)
