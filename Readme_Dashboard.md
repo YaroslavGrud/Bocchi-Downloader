@@ -78,10 +78,26 @@ systemctl start glances
 
 Проверьте работу: `curl http://127.0.0.1:61208/api/4/cpu` → должен вернуть JSON.
 
-### 3️⃣ Установка и настройка Nginx
+### 3️⃣ Установка и настройка Nginx + FastAPI
 
 ```bash
 apt install -y nginx
+```
+
+```
+[Unit]
+Description=Bocchi Dashboard (FastAPI)
+After=network.target
+
+[Service]
+WorkingDirectory=/root/bocchi_bot
+ExecStart=/root/bocchi_bot/venv/bin/python -m uvicorn Dashboard_Endpoint:app --host 127.0.0.1 --port 61211
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
 ```
 
 Создайте конфигурационный файл:
@@ -113,6 +129,23 @@ server {
         alias /etc/os-release;
         default_type text/plain;
     }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+# Новый дашборд — всё через FastAPI на 61211
+server {
+    listen 61209;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:61211;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
 EOF
 
 ln -sf /etc/nginx/sites-available/dashboard /etc/nginx/sites-enabled/
@@ -161,7 +194,7 @@ systemctl enable ping_server.service
 systemctl start ping_server.service
 ```
 
-### 7 Проверка
+### 8 Проверка
 
 Откройте браузер по адресу: `http://<IP-вашего-сервера>:61209`
 
