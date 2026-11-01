@@ -104,6 +104,7 @@
         .bot-status, .ping-status { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.07); border: 1px solid var(--border-soft); border-radius: 30px; padding: 6px 12px; backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); font-size: clamp(0.68rem, 1.4vw, 0.75rem); font-weight: 700; white-space: nowrap; color: var(--text-main); }
         .status-led { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
         .bot-status.online .status-led, .ping-status.good .status-led { background: #2ecc71; box-shadow: 0 0 8px #2ecc71; }
+        .bot-status.offline .status-led { background: #e74c3c; box-shadow: 0 0 8px #e74c3c; }
         .ping-status.warn .status-led { background: #f1c40f; box-shadow: 0 0 8px #f1c40f; }
         .ping-status.bad .status-led { background: #e74c3c; box-shadow: 0 0 8px #e74c3c; }
 
@@ -861,8 +862,9 @@
             }
             const containers = await resp.json();
             const bot = containers.find(c => c.name === 'bocchi_bot');
-            container.className = bot ? 'bot-status online' : 'bot-status offline';
-            text.innerText = bot ? heroTexts.botOnline : heroTexts.botOffline;
+            const online = !!bot && bot.status === 'running';
+            container.className = online ? 'bot-status online' : 'bot-status offline';
+            text.innerText = online ? heroTexts.botOnline : heroTexts.botOffline;
         } catch(e) {
             document.getElementById('botStatusContainer').className = 'bot-status offline';
             document.getElementById('botStatusText').innerText = HEROES[currentHeroIdx].texts.botOffline;
