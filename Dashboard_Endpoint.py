@@ -19,8 +19,6 @@ def _http_get(url, timeout=5.0):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read(), r.headers.get("Content-Type", "application/json")
 
-# --- Собственные эндпоинты (обязательно ДО catch-all прокси) ---
-
 @app.get("/api/ping")
 def api_ping():
     """HTTP-задержка до music.yandex.ru — как у старого дашборда (~200 мс)."""
@@ -65,19 +63,15 @@ def api_uptime():
     except Exception:
         return Response(content="{}", status_code=502)
 
-# --- Catch-all прокси в Glances (строго после эндпоинтов выше) ---
-
 @app.get("/api/4/{path:path}")
 def glances_proxy(path: str):
-    """Прокси сырых метрик в Glances."""
+    """Catch-all прокси в Glances (строго после эндпоинтов выше)."""
     try:
         body, ctype = _http_get(f"{GLANCES}/api/4/{path}", 5.0)
         return Response(content=body, media_type=ctype)
     except Exception as e:
         return Response(content=json.dumps({"error": str(e)}),
                         status_code=502, media_type="application/json")
-
-# --- Статика ---
 
 @app.get("/")
 def index():
