@@ -88,8 +88,9 @@ apt install -y nginx
 
 ```bash
 cat > /etc/nginx/sites-available/dashboard << 'EOF'
+# Старый дашборд — без изменений (статика + API)
 server {
-    listen 61209;
+    listen 61212;
     server_name _;
 
     root /var/www/dashboard;
@@ -112,11 +113,6 @@ server {
         alias /etc/os-release;
         default_type text/plain;
     }
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
 EOF
 
 ln -sf /etc/nginx/sites-available/dashboard /etc/nginx/sites-enabled/
