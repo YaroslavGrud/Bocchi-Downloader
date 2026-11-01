@@ -729,7 +729,7 @@
             cpuChart.data.labels = timeLabels;
             cpuChart.data.datasets[0].data = cpuHistory;
             const maxCpu = Math.max(...cpuHistory, 5);
-            cpuChart.options.scales.y.max = niceMax(maxCpu * 1.2, 10);
+            cpuChart.options.scales.y.max = Math.min(niceMax(maxCpu * 1.2, 10), 100);
             cpuChart.update();
             document.getElementById('cpuUpdateTime').innerText = `Обновлено: ${currentTime}`;
         }
