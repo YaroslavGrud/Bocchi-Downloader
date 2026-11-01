@@ -99,6 +99,12 @@ RestartSec=5
 WantedBy=multi-user.target
 
 ```
+Затем запустить
+```
+systemctl daemon-reload
+systemctl enable --now bocchi-dashboard
+systemctl status bocchi-dashboard --no-pager
+```
 
 Создайте конфигурационный файл:
 
