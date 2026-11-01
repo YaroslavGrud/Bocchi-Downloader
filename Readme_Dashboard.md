@@ -43,7 +43,7 @@
 ### 1️⃣ Установка Glances
 
 ```bash
-apt update && apt install -y pipx python3-dev
+apt update && apt install -y pipx python3-dev python3-venv
 pipx ensurepath
 source ~/.bashrc
 pipx install 'glances[all]'
@@ -72,19 +72,24 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable glances
-systemctl start glances
+systemctl enable --now glances
 ```
 
 Проверьте работу: `curl http://127.0.0.1:61208/api/4/cpu` → должен вернуть JSON.
 
-### 3️⃣ Установка и настройка Nginx + FastAPI
+### 3️⃣  Виртуальное окружение дашборда
 
 ```bash
-apt install -y nginx
+apt install -y git nginx
+cd /root
+git clone -b Yaroslav_grud https://github.com/YaroslavGrud/Bocchi-Downloader.git bocchi_bot
+cd /root/bocchi_bot
+python3 -m venv venv
+venv/bin/pip install fastapi "uvicorn[standard]" httpx
 ```
-В `/etc/systemd/system/bocchi-dashboard.service` добавить:
-```
+### 4️⃣ Служба FastAPI-дашборда
+```bash
+cat > /etc/systemd/system/bocchi-dashboard.service << 'EOF'
 [Unit]
 Description=Bocchi Dashboard (FastAPI)
 After=network.target
@@ -97,20 +102,23 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
+EOF
 
-```
-Затем запустить
-```
 systemctl daemon-reload
 systemctl enable --now bocchi-dashboard
-systemctl status bocchi-dashboard --no-pager
+```
+[!TIP]
+> Проверка синтаксиса перед рестартом (полезная привычка):
+
+```bash
+cd /root/bocchi_bot && venv/bin/python -c "import Dashboard_Endpoint" && echo "SYNTAX OK"
 ```
 
-Создайте конфигурационный файл:
+### 5️⃣ Nginx
 
 ```bash
 cat > /etc/nginx/sites-available/dashboard << 'EOF'
-# Старый дашборд — без изменений (статика + API)
+# Старый дашборд (опционально: статика + API напрямую в Glances)
 server {
     listen 61212;
     server_name _;
@@ -125,12 +133,6 @@ server {
         rewrite ^/api/(.*) /api/$1 break;
     }
 
-    location /api/ping {
-        proxy_pass http://127.0.0.1:61210/ping;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
     location /os-release {
         alias /etc/os-release;
         default_type text/plain;
@@ -140,7 +142,8 @@ server {
         try_files $uri $uri/ =404;
     }
 }
-# Новый дашборд — всё через FastAPI на 61211
+
+# Новый дашборд — всё через FastAPI
 server {
     listen 61209;
     server_name _;
@@ -157,23 +160,18 @@ EOF
 ln -sf /etc/nginx/sites-available/dashboard /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
+
 ```
 
-### 4️⃣ Размещение дашборда
-
-Скопируйте содержимое файла [`bocchi_dashboard.html`](https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/bocchi_dashboard.html) в `/var/www/dashboard/index.html`:
-
-```bash
-mkdir -p /var/www/dashboard
-curl -o /var/www/dashboard/index.html https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/bocchi_dashboard.html
-```
-
-### 5️⃣ Открыть порт в файрволе
+### 6️⃣ Файрвол
 
 ```bash
 ufw allow 61209/tcp
+ufw allow 61212/tcp   # только если используете старый дашборд
+
 ```
-### 6 Пинг серверов Яндекс.Музыки
+
+### 7 Пинг серверов Яндекс.Музыки (может пригодится)
 
 ```bash
 cat > /etc/systemd/system/ping_server.service <<'EOF'
@@ -202,100 +200,16 @@ systemctl start ping_server.service
 
 ### 8 Проверка
 
-Откройте браузер по адресу: `http://<IP-вашего-сервера>:61209`
+Откройте браузер по адресу `http://<IP-сервера>:61209`. Дашборд обновляется каждые 2 секунды; зелёная точка и «Бот онлайн» — значит контейнер bocchi_bot запущен.
 
-Дашборд будет автоматически обновляться каждые 2 секунды. Если контейнер `bocchi_bot` запущен – вы увидите зелёную точку и надпись «Бот онлайн».
+Контрольный набор с сервера:
 
-Если и это не помогло то делаем:
-```
-cd /root/bocchi_bot
-cp Dashboard_Endpoint.py Dashboard_Endpoint.py.bak
-cat > Dashboard_Endpoint.py << 'EOF'
-import re
-import time
-import subprocess
-from pathlib import Path
-
-import httpx
-import uvicorn
-from fastapi import FastAPI, Response
-from fastapi.staticfiles import StaticFiles
-
-BASE_DIR = Path(__file__).resolve().parent
-GLANCES = "http://127.0.0.1:61208"
-
-app = FastAPI(title="Bocchi Dashboard API")
-
-# --- Собственные эндпоинты (обязательно ДО catch-all прокси) ---
-
-@app.get("/api/ping")
-def api_ping():
-    """Реальный замер сетевой задержки, а не random."""
-    try:
-        start = time.monotonic()
-        httpx.get("https://ya.ru", timeout=3.0)
-        latency = round((time.monotonic() - start) * 1000)
-    except Exception:
-        latency = -1
-    return {"latency": latency}
-
-@app.get("/api/4/containers")
-def api_containers():
-    """Честный статус контейнера из docker."""
-    try:
-        r = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Status}}", "bocchi_bot"],
-            capture_output=True, text=True, timeout=5,
-        )
-        status = r.stdout.strip() or "missing"
-    except Exception:
-        status = "unknown"
-    return [{"name": "bocchi_bot", "status": status}]
-
-@app.get("/api/4/uptime")
-def api_uptime():
-    """Отдаёт аптайм в секундах — фронтенд-парсер это умеет."""
-    try:
-        r = httpx.get(f"{GLANCES}/api/4/uptime", timeout=3.0)
-        s = r.json()
-        if not isinstance(s, str):
-            s = str(s)
-        d = re.search(r"(\d+)\s*days?", s, re.I)
-        hms = re.search(r"(\d+):(\d+):(\d+)", s)
-        if d or hms:
-            sec = int(d.group(1)) * 86400 if d else 0
-            if hms:
-                sec += int(hms.group(1)) * 3600 + int(hms.group(2)) * 60 + int(hms.group(3))
-            return sec
-        return s  # незнакомый формат — отдаём как есть
-    except Exception:
-        return Response(content="{}", status_code=502)
-
-# --- Catch-all прокси в Glances (строго после эндпоинтов выше) ---
-
-@app.get("/api/4/{path:path}")
-def glances_proxy(path: str):
-    r = httpx.get(f"{GLANCES}/api/4/{path}", timeout=5.0)
-    return Response(
-        content=r.content,
-        media_type=r.headers.get("content-type", "application/json"),
-    )
-
-# --- Статика ---
-
-@app.get("/")
-def index():
-    return Response(
-        content=(BASE_DIR / "bocchi_dashboard.html").read_bytes(),
-        media_type="text/html",
-    )
-
-app.mount("/assets", StaticFiles(directory=str(BASE_DIR / "assets")), name="assets")
-
-if __name__ == "__main__":
-    # Порт 61209 занят Nginx — живём на внутреннем 61211
-    uvicorn.run(app, host="127.0.0.1", port=61211)
-EOF
+```bash
+ss -tlnp | grep -E "61208|61209|61211"             # три живых порта
+curl -s http://127.0.0.1:61211/api/ping             # ~180–250, не -1
+curl -s http://127.0.0.1:61211/api/4/uptime         # число секунд
+curl -s http://127.0.0.1:61211/api/4/cpu | head -c 100
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:61209/   # 200
 ```
 
 ## ⚙️ Проблемы и решения
