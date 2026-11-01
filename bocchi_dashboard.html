@@ -603,6 +603,7 @@
         const d = Math.floor(seconds / 86400);
         const h = Math.floor((seconds % 86400) / 3600);
         const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
 
         const parts = [];
         if (d > 0) {
@@ -624,6 +625,11 @@
         else if ([2, 3, 4].includes(m % 10) && ![12, 13, 14].includes(m % 100)) mWord = 'минуты';
         else mWord = 'минут';
         parts.push(`${m} ${mWord}`);
+
+        let sWord = 'секунд';
+        if (s % 10 === 1 && s % 100 !== 11) sWord = 'секунда';
+        else if ([2, 3, 4].includes(s % 10) && ![12, 13, 14].includes(s % 100)) sWord = 'секунды';
+        parts.push(`${s} ${sWord}`);
 
         return parts.join(' ') || 'только что';
     }
