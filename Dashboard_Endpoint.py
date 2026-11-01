@@ -1,9 +1,10 @@
+import json
 import re
-import time
 import subprocess
+import time
+import urllib.request
 from pathlib import Path
 
-import httpx
 import uvicorn
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
@@ -13,14 +14,20 @@ GLANCES = "http://127.0.0.1:61208"
 
 app = FastAPI(title="Bocchi Dashboard API")
 
+def _http_get(url, timeout=5.0):
+    req = urllib.request.Request(url, headers={"User-Agent": "bocchi-dashboard/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(), r.headers.get("Content-Type", "application/json")
+
 # --- Собственные эндпоинты (обязательно ДО catch-all прокси) ---
 
 @app.get("/api/ping")
 def api_ping():
-    """Реальный замер сетевой задержки, а не random."""
+    """HTTP-задержка до music.yandex.ru — как у старого дашборда (~200 мс)."""
     try:
         start = time.monotonic()
-        httpx.get("https://ya.ru", timeout=3.0)
+        req = urllib.request.Request("https://music.yandex.ru/", method="HEAD")
+        urllib.request.urlopen(req, timeout=3)
         latency = round((time.monotonic() - start) * 1000)
     except Exception:
         latency = -1
@@ -41,12 +48,10 @@ def api_containers():
 
 @app.get("/api/4/uptime")
 def api_uptime():
-    """Отдаёт аптайм в секундах — фронтенд-парсер это умеет."""
+    """Аптайм Glances -> секунды."""
     try:
-        r = httpx.get(f"{GLANCES}/api/4/uptime", timeout=3.0)
-        s = r.json()
-        if not isinstance(s, str):
-            s = str(s)
+        body, _ = _http_get(f"{GLANCES}/api/4/uptime", 3.0)
+        s = body.decode("utf-8", "replace").strip().strip('"')
         d = re.search(r"(\d+)\s*days?", s, re.I)
         hms = re.search(r"(\d+):(\d+):(\d+)", s)
         if d or hms:
@@ -54,7 +59,9 @@ def api_uptime():
             if hms:
                 sec += int(hms.group(1)) * 3600 + int(hms.group(2)) * 60 + int(hms.group(3))
             return sec
-        return s  # незнакомый формат — отдаём как есть
+        if s.isdigit():
+            return int(s)
+        return s
     except Exception:
         return Response(content="{}", status_code=502)
 
@@ -62,11 +69,13 @@ def api_uptime():
 
 @app.get("/api/4/{path:path}")
 def glances_proxy(path: str):
-    r = httpx.get(f"{GLANCES}/api/4/{path}", timeout=5.0)
-    return Response(
-        content=r.content,
-        media_type=r.headers.get("content-type", "application/json"),
-    )
+    """Прокси сырых метрик в Glances."""
+    try:
+        body, ctype = _http_get(f"{GLANCES}/api/4/{path}", 5.0)
+        return Response(content=body, media_type=ctype)
+    except Exception as e:
+        return Response(content=json.dumps({"error": str(e)}),
+                        status_code=502, media_type="application/json")
 
 # --- Статика ---
 
@@ -80,5 +89,4 @@ def index():
 app.mount("/assets", StaticFiles(directory=str(BASE_DIR / "assets")), name="assets")
 
 if __name__ == "__main__":
-    # Порт 61209 занят Nginx — живём на внутреннем 61211
     uvicorn.run(app, host="127.0.0.1", port=61211)
