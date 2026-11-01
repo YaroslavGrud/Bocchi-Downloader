@@ -83,7 +83,7 @@ systemctl start glances
 ```bash
 apt install -y nginx
 ```
-
+В `/etc/systemd/system/bocchi-dashboard.service` добавить:
 ```
 [Unit]
 Description=Bocchi Dashboard (FastAPI)
