@@ -1,7 +1,7 @@
 # 🎸 Bocchi Downloader — Server Status Dashboard
 
 Красивый, анимированный дашборд мониторинга сервера \
-Данные получаются через **Glances API** через прослойку FastAPI, отображаются в реальном времени и обновляются каждые 2 секунды.
+Данные получаются через **Glances API** + FastAPI, отображаются в реальном времени и обновляются каждые 2 секунды.
 
 ![Dashboard Preview](https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/image.png)
 
