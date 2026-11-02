@@ -66,8 +66,25 @@ def api_uptime():
 @app.get("/api/4/{path:path}")
 def glances_proxy(path: str):
     """Catch-all прокси в Glances (строго после эндпоинтов выше)."""
+    safe_path = path.strip()
+    # Block traversal/query/fragment/control-char based path manipulation.
+    if (
+        not safe_path
+        or safe_path.startswith("/")
+        or ".." in safe_path
+        or "?" in safe_path
+        or "#" in safe_path
+        or "\\" in safe_path
+        or re.search(r"[\x00-\x1f\x7f]", safe_path)
+        or not re.fullmatch(r"[A-Za-z0-9._/-]+", safe_path)
+    ):
+        return Response(
+            content=json.dumps({"error": "Invalid path"}),
+            status_code=400,
+            media_type="application/json",
+        )
     try:
-        body, ctype = _http_get(f"{GLANCES}/api/4/{path}", 5.0)
+        body, ctype = _http_get(f"{GLANCES}/api/4/{safe_path}", 5.0)
         return Response(content=body, media_type=ctype)
     except Exception as e:
         return Response(content=json.dumps({"error": str(e)}),
