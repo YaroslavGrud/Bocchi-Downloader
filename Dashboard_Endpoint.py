@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import subprocess
 import time
@@ -11,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent
 GLANCES = "http://127.0.0.1:61208"
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Bocchi Dashboard API")
 
@@ -86,8 +89,9 @@ def glances_proxy(path: str):
     try:
         body, ctype = _http_get(f"{GLANCES}/api/4/{safe_path}", 5.0)
         return Response(content=body, media_type=ctype)
-    except Exception as e:
-        return Response(content=json.dumps({"error": str(e)}),
+    except Exception:
+        logger.exception("Glances proxy request failed")
+        return Response(content=json.dumps({"error": "Upstream service unavailable"}),
                         status_code=502, media_type="application/json")
 
 @app.get("/")
