@@ -22,5 +22,5 @@ catboxpy==0.1.1.1
 # yandex-music-downloader из конкретного архива (форк)
 yandex-music-downloader @ https://github.com/llistochek/yandex-music-downloader/archive/refs/tags/v3.5.5.zip
 fastapi>=0.115
-uvicorn[standard]>=0.30
+uvicorn[standard]>=0.54.0
 httpx>=0.27
