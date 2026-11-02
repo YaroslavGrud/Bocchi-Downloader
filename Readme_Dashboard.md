@@ -151,32 +151,6 @@ cd /root/bocchi_bot && venv/bin/python -c "import Dashboard_Endpoint" && echo "S
 
 ```bash
 cat > /etc/nginx/sites-available/dashboard << 'EOF'
-# Старый дашборд (опционально: статика + API напрямую в Glances)
-server {
-    listen 61212;
-    server_name _;
-
-    root /var/www/dashboard;
-    index index.html;
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:61208;
-        proxy_set_header Host 127.0.0.1:61208;
-        proxy_set_header X-Real-IP $remote_addr;
-        rewrite ^/api/(.*) /api/$1 break;
-    }
-
-    location /os-release {
-        alias /etc/os-release;
-        default_type text/plain;
-    }
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
-
-# Новый дашборд — всё через FastAPI
 server {
     listen 61209;
     server_name _;
@@ -199,7 +173,6 @@ nginx -t && systemctl reload nginx
 
 ```bash
 ufw allow 61209/tcp
-ufw allow 61212/tcp   # только если используете старый дашборд
 ```
 
 ### 7️⃣ Проверка
