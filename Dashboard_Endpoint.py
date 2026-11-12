@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent
 GLANCES = "http://127.0.0.1:61208"
+CHARACTERS_CONFIG_PATH = BASE_DIR / "assets" / "characters_config.json"
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,30 @@ def _http_get(url, timeout=5.0, method="GET"):
     req = urllib.request.Request(url, method=method, headers={"User-Agent": "bocchi-dashboard/1.0"})
     with _opener.open(req, timeout=timeout) as r:
         return r.read(), r.headers.get("Content-Type", "application/json")
+
+
+@app.get("/api/characters")
+def api_characters():
+    """Возвращает привязку изображений к персонажам из assets/characters_config.json."""
+    if not CHARACTERS_CONFIG_PATH.exists():
+        return {}
+    try:
+        raw_data = json.loads(CHARACTERS_CONFIG_PATH.read_text(encoding="utf-8"))
+        # Отфильтровываем технические ключи-комментарии (_comment, _note и т.д.)
+        return {
+            char_id: {
+                k: v for k, v in char_data.items() if not k.startswith("_")
+            }
+            for char_id, char_data in raw_data.items()
+            if not char_id.startswith("_") and isinstance(char_data, dict)
+        }
+    except Exception:
+        logger.exception("Failed to read characters_config.json")
+        return Response(
+            content=json.dumps({"error": "Invalid characters config"}),
+            status_code=500,
+            media_type="application/json",
+        )
 
 
 @app.get("/api/ping")

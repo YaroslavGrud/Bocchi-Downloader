@@ -17,7 +17,7 @@ jobs:
         with:
           token: ${{ secrets.PAT_TOKEN }}   # PAT с доступом к workflow
 
-      # ---------- 1. Обновление SHA для GitHub Actions (ваш скрипт) ----------
+      # ---------- 1. Обновление SHA для GitHub Actions ----------
       - name: Pin GitHub Actions
         id: pin
         run: |

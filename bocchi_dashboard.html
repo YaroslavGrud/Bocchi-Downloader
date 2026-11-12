@@ -263,9 +263,10 @@
 <script>
     const HEROES = [
         {
+            id: 'bocchi',
             name: 'Hitori',
-            avatar: 'assets/characters/bocchi_avatar.png',
-            art: 'assets/characters/bocchi_art.jpg',
+            avatars: ['assets/characters/bocchi_avatar.png'],
+            arts: ['assets/characters/bocchi_art.jpg'],
             color: '#F5A0C5',
             icon: 'fa-guitar',
             pageTitle: 'Bocchi Downloader · Паника под контролем',
@@ -286,9 +287,10 @@
             }
         },
         {
+            id: 'nijika',
             name: 'Nijika',
-            avatar: 'assets/characters/nijika_avatar.png',
-            art: 'assets/characters/nijika_art.jpg',
+            avatars: ['assets/characters/nijika_avatar.png'],
+            arts: ['assets/characters/nijika_art.jpg'],
             color: '#FFD166',
             icon: 'fa-drum',
             pageTitle: 'Starry Manager · Ритм-секция сервера',
@@ -309,9 +311,10 @@
             }
         },
         {
+            id: 'ryo',
             name: 'Ryo',
-            avatar: 'assets/characters/ryo_avatar.png',
-            art: 'assets/characters/ryo_art.jpg',
+            avatars: ['assets/characters/ryo_avatar.png'],
+            arts: ['assets/characters/ryo_art.jpg'],
             color: '#6BC5FF',
             icon: 'fa-music',
             pageTitle: 'Bass Core · Экономный поток',
@@ -332,9 +335,10 @@
             }
         },
         {
+            id: 'kita',
             name: 'Kita',
-            avatar: 'assets/characters/kita_avatar.png',
-            art: 'assets/characters/kita_art.jpg',
+            avatars: ['assets/characters/kita_avatar.png'],
+            arts: ['assets/characters/kita_art.jpg'],
             color: '#EF476F',
             icon: 'fa-microphone',
             pageTitle: 'Kita Shine · Максимальная яркость',
@@ -355,6 +359,33 @@
             }
         }
     ];
+
+    function pickRandomAsset(list, fallback) {
+        if (Array.isArray(list) && list.length > 0) {
+            return list[Math.floor(Math.random() * list.length)];
+        }
+        return fallback;
+    }
+
+    async function loadCharactersConfig() {
+        try {
+            const resp = await fetch(`/api/characters?t=${Date.now()}`, { cache: "no-store" });
+            if (!resp.ok) return;
+            const cfg = await resp.json();
+            HEROES.forEach(hero => {
+                const entry = cfg[hero.id];
+                if (!entry) return;
+                if (Array.isArray(entry.avatars) && entry.avatars.length > 0) {
+                    hero.avatars = entry.avatars;
+                }
+                if (Array.isArray(entry.arts) && entry.arts.length > 0) {
+                    hero.arts = entry.arts;
+                }
+            });
+        } catch (e) {
+            console.warn('Не удалось загрузить characters_config.json, используются пути по умолчанию', e);
+        }
+    }
 
     let currentHeroIdx = 0;
     let rotationTimer = null;
@@ -388,7 +419,7 @@
         }, speed);
     }
 
-    function updateFavicon(hero) {
+    function updateFavicon(hero, fallbackAvatar) {
         const canvas = document.createElement('canvas');
         canvas.width = 32; canvas.height = 32;
         const ctx = canvas.getContext('2d');
@@ -401,17 +432,19 @@
             ctx.fillText(iconMap[hero.icon] || '\uf001', 16, 16);
             document.getElementById('favicon').href = canvas.toDataURL('image/png');
         }).catch(() => {
-            document.getElementById('favicon').href = hero.avatar;
+            document.getElementById('favicon').href = fallbackAvatar;
         });
     }
 
     function applyHero(hero, animate = false) {
         const avatar = document.getElementById('heroAvatar');
         const bgArt = document.getElementById('bgArt');
-        avatar.style.backgroundImage = `url('${hero.avatar}')`;
+        const selectedAvatar = pickRandomAsset(hero.avatars, 'assets/characters/bocchi_avatar.png');
+        const selectedArt = pickRandomAsset(hero.arts, 'assets/characters/bocchi_art.jpg');
+        avatar.style.backgroundImage = `url('${selectedAvatar}')`;
         avatar.style.borderColor = hero.color;
-        bgArt.style.backgroundImage = `url('${hero.art}')`;
-        updateFavicon(hero);
+        bgArt.style.backgroundImage = `url('${selectedArt}')`;
+        updateFavicon(hero, selectedAvatar);
         document.title = hero.pageTitle || 'Bocchi Downloader · Server Monitoring';
 
         const t = hero.texts;
@@ -485,9 +518,10 @@
         scheduleRotation();
     }
 
-    (function initHero() {
+    (async function initHero() {
         const saved = parseInt(localStorage.getItem('bocchi_hero'), 10);
         if (Number.isInteger(saved) && saved >= 0 && saved < HEROES.length) currentHeroIdx = saved;
+        await loadCharactersConfig();
         applyHero(HEROES[currentHeroIdx], false);
         scheduleRotation();
     })();

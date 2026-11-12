@@ -1,0 +1,45 @@
+{
+  "_comment": "Конфигурация привязки изображений к персонажам. Ключи, начинающиеся с '_', игнорируются сервером.",
+  "bocchi": {
+    "_note": "Персонаж: Goto Hitori (Bocchi)",
+    "name": "Goto Hitori (Bocchi)",
+    "avatars": [
+      "assets/characters/bocchi_avatar.png"
+    ],
+    "arts": [
+      "assets/characters/bocchi_art.jpg"
+    ]
+  },
+
+  "nijika": {
+    "_note": "Персонаж: Ijichi Nijika",
+    "name": "Ijichi Nijika",
+    "avatars": [
+      "assets/characters/nijika_avatar.png"
+    ],
+    "arts": [
+      "assets/characters/nijika_art.jpg"
+    ]
+  },
+
+  "ryo": {
+    "_note": "Персонаж: Yamada Ryo",
+    "name": "Yamada Ryo",
+    "avatars": [
+      "assets/characters/ryo_avatar.png"
+    ],
+    "arts": [
+      "assets/characters/ryo_art.jpg"
+    ]
+  },
+  "kita": {
+    "_note": "Персонаж: Kita Ikuyo",
+    "name": "Kita Ikuyo",
+    "avatars": [
+      "assets/characters/kita_avatar.png"
+    ],
+    "arts": [
+      "assets/characters/kita_art.jpg"
+    ]
+  }
+}

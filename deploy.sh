@@ -6,11 +6,11 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 WORKDIR="$HOME/bocchi_bot"
-REPO_URL="https://github.com/YaroslavGrud/Bocchi-Downloader.git"
-BRANCH="Yaroslav_grud"
+REPO_URL="https://github.com/StalkerBocchi/Bocchi-Downloader.git"
+BRANCH="main"
 
 echo -e "${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}        🚀 BOCCHI DOWNLOADER — АВТО-УСТАНОВКА         ${NC}"
+echo -e "${GREEN}        🚀 BOCCHI DOWNLOADER — АВТО-УСТАНОВКА             ${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
 
 if ! command -v docker &> /dev/null; then
@@ -74,8 +74,8 @@ docker run -d \
 # Флаг --read-only удалён
 
 echo -e "\n${GREEN}╔════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║              ✅ БОТ УСПЕШНО ЗАПУЩЕН!                 ║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════════════════════════╝${NC}"
+echo -e "${GREEN}  ║              ✅ БОТ УСПЕШНО ЗАПУЩЕН!                   ║${NC}"
+echo -e "${GREEN}  ╚════════════════════════════════════════════════════════╝${NC}"
 echo -e "\n📋 Логи: docker logs -f bocchi_bot"
 echo -e "🛑 Остановка: docker stop bocchi_bot"
 echo -e "▶️  Запуск: docker start bocchi_bot"

@@ -3,7 +3,7 @@
 Красивый, анимированный дашборд мониторинга сервера \
 Данные получаются через **Glances API** + FastAPI, отображаются в реальном времени и обновляются каждые 2 секунды.
 
-![Dashboard Preview](https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/image.png)
+![Dashboard Preview](https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/image.png)
 
 > [!Important]
 > ## Обнаружены особенности работы дашборда
@@ -24,7 +24,7 @@
 > Нет, это нормальное поведение любого браузера. Сам дашборд всегда показывает актуальные данные, которые получает напрямую из системы каждые 2 секунды. Проблема только в том, что браузер может «застрять» на старой версии. Режим инкогнито или жёсткая перезагрузка решают это мгновенно.
 >
 > Если вы открыли дашборд в инкогнито и данные всё ещё не обновляются — значит, проблема не в кеше. \
-> Если у вас возникли проблемы, пожалуйста, сообщите о них [здесь](https://github.com/YaroslavGrud/Bocchi-Downloader/issues). Мы обязательно поможем вам разобраться.
+> Если у вас возникли проблемы, пожалуйста, сообщите о них [здесь](https://github.com/StalkerBocchi/Bocchi-Downloader/issues). Мы обязательно поможем вам разобраться.
 
 ## 📊 Отображаемые метрики
 
@@ -61,7 +61,7 @@ FastAPI — тонкая прослойка: «сырые» метрики (CPU,
 
 ```bash
 mkdir -p /root/deploy-tmp && cd /root/deploy-tmp
-curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/deploy.sh -o deploy.sh && bash deploy.sh
+curl -fsSL https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/deploy.sh -o deploy.sh && bash deploy.sh
 ```
 
 Скрипт спросит токен Telegram-бота и соберёт контейнер `bocchi_bot`.
@@ -109,7 +109,7 @@ systemctl enable --now glances
 ```bash
 apt install -y git nginx
 cd /root
-git clone -b Yaroslav_grud https://github.com/YaroslavGrud/Bocchi-Downloader.git bocchi_bot
+git clone -b main https://github.com/StalkerBocchi/Bocchi-Downloader.git bocchi_bot
 cd /root/bocchi_bot
 python3 -m venv venv
 venv/bin/pip install fastapi "uvicorn[standard]"
@@ -220,7 +220,7 @@ systemctl restart bocchi-dashboard
 Затем обновите страницу в браузере (Ctrl+F5). Копия в `/var/www/dashboard/index.html` нужна только старому дашборду на порту 61212 — его можно обновить так:
 
 ```bash
-curl -o /var/www/dashboard/index.html https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/bocchi_dashboard.html
+curl -o /var/www/dashboard/index.html https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/bocchi_dashboard.html
 ```
 
 > [!Warning]

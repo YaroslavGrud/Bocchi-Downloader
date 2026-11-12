@@ -1,12 +1,14 @@
 # Bocchi Downloader — автономный пакет для Android
+> [!NOTE]
+> Раздел переведён в **историческую справку**. Инструкция оставлена для тех, кто запускает старые версии бота.
 Инструмент для скачивания музыки с Яндекс.Музыки, упакованный в полностью автономный пакет.  
 Достаточно один раз собрать архив на устройстве с интернетом, а затем развернуть его на любом Android‑устройстве **без доступа к сети**.
 
 [![Platform](https://img.shields.io/badge/Platform-Android-green)](https://www.android.com)
 [![Termux](https://img.shields.io/badge/Termux-Required-blue)](https://termux.com)
-[![Arch](https://img.shields.io/badge/Arch-aarch64%20%7C%20armhf-blue)](https://github.com/YaroslavGrud/Bocchi-Downloader)
-[![Offline](https://img.shields.io/badge/Offline-Ready-success)](https://github.com/YaroslavGrud/Bocchi-Downloader)
-[![Size](https://img.shields.io/badge/Size-4_GB-orange)](https://github.com/YaroslavGrud/Bocchi-Downloader)
+[![Arch](https://img.shields.io/badge/Arch-aarch64%20%7C%20armhf-blue)](https://github.com/StalkerBocchi/Bocchi-Downloader)
+[![Offline](https://img.shields.io/badge/Offline-Ready-success)](https://github.com/StalkerBocchi/Bocchi-Downloader)
+[![Size](https://img.shields.io/badge/Size-4_GB-orange)](https://github.com/StalkerBocchi/Bocchi-Downloader)
 [![License: NonCommercial](https://img.shields.io/badge/License-NonCommercial-red.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 
@@ -38,7 +40,7 @@
 Она скачает Ubuntu, установит все зависимости, создаст правильный лаунчер и упакует всё в архив.
 
 ```bash
-set +H && termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install -y proot-distro wget tar && ARCH=$(uname -m) && if [ "$ARCH" = "aarch64" ]; then ROOTFS_ARCH="aarch64"; elif [ "$ARCH" = "armv7l" ] || [ "$ARCH" = "armv8l" ]; then ROOTFS_ARCH="armhf"; else echo "Unsupported architecture: $ARCH"; exit 1; fi && ROOTFS_URL="https://github.com/termux/proot-distro/releases/download/v4.18.0/ubuntu-noble-${ROOTFS_ARCH}-pd-v4.18.0.tar.xz" && mkdir -p $PREFIX/var/lib/proot-distro/dlcache && echo "📥 Скачивание Ubuntu rootfs для ${ROOTFS_ARCH}..." && wget -O $PREFIX/var/lib/proot-distro/dlcache/ubuntu-rootfs.tar.xz $ROOTFS_URL && yes | proot-distro remove ubuntu 2>/dev/null || true && proot-distro reset ubuntu 2>/dev/null || true && proot-distro install ubuntu && proot-distro login ubuntu -- bash -c "apt update && apt upgrade -y && apt install -y python3 python3-pip python3-venv ffmpeg git wget && mkdir -p /root/bocchi_bundle && cd /root/bocchi_bundle && python3 -m venv bocchi_env && bocchi_env/bin/pip install https://github.com/llistochek/yandex-music-downloader/archive/main.zip aiohttp mutagen yandex-music colorama setuptools wheel && wget -O bocchi_bot_CLI.py https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/Bocchi_Downloader/bocchi_bot_CLI.py && echo 'IyEvYmluL2Jhc2gKRElSPSIkKGNkICIkKGRpcm5hbWUgIiQwIikiICYmIHB3ZCkiCnNvdXJjZSAiJERJUi9ib2NjaGlfZW52L2Jpbi9hY3RpdmF0ZSIKZXhlYyBweXRob24gIiRESVIvYm9jY2hpX2JvdF9DTEkucHkiICIkQCIK' | base64 -d > run_bocchi.sh && chmod +x run_bocchi.sh" && proot-distro backup ubuntu --output $HOME/ubuntu-backup.tar.gz && cd /data/data/com.termux/files && tar -czvf /sdcard/Download/termux-native-bocchi.tar.gz ./usr ./home && set -H && echo "✅ Готово! Архив: /sdcard/Download/termux-native-bocchi.tar.gz"
+set +H && termux-setup-storage && pkg update -y && pkg upgrade -y && pkg install -y proot-distro wget tar && ARCH=$(uname -m) && if [ "$ARCH" = "aarch64" ]; then ROOTFS_ARCH="aarch64"; elif [ "$ARCH" = "armv7l" ] || [ "$ARCH" = "armv8l" ]; then ROOTFS_ARCH="armhf"; else echo "Unsupported architecture: $ARCH"; exit 1; fi && ROOTFS_URL="https://github.com/termux/proot-distro/releases/download/v4.18.0/ubuntu-noble-${ROOTFS_ARCH}-pd-v4.18.0.tar.xz" && mkdir -p $PREFIX/var/lib/proot-distro/dlcache && echo "📥 Скачивание Ubuntu rootfs для ${ROOTFS_ARCH}..." && wget -O $PREFIX/var/lib/proot-distro/dlcache/ubuntu-rootfs.tar.xz $ROOTFS_URL && yes | proot-distro remove ubuntu 2>/dev/null || true && proot-distro reset ubuntu 2>/dev/null || true && proot-distro install ubuntu && proot-distro login ubuntu -- bash -c "apt update && apt upgrade -y && apt install -y python3 python3-pip python3-venv ffmpeg git wget && mkdir -p /root/bocchi_bundle && cd /root/bocchi_bundle && python3 -m venv bocchi_env && bocchi_env/bin/pip install https://github.com/llistochek/yandex-music-downloader/archive/main.zip aiohttp mutagen yandex-music colorama setuptools wheel && wget -O bocchi_bot_CLI.py https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/Bocchi_Downloader/bocchi_bot_CLI.py && echo 'IyEvYmluL2Jhc2gKRElSPSIkKGNkICIkKGRpcm5hbWUgIiQwIikiICYmIHB3ZCkiCnNvdXJjZSAiJERJUi9ib2NjaGlfZW52L2Jpbi9hY3RpdmF0ZSIKZXhlYyBweXRob24gIiRESVIvYm9jY2hpX2JvdF9DTEkucHkiICIkQCIK' | base64 -d > run_bocchi.sh && chmod +x run_bocchi.sh" && proot-distro backup ubuntu --output $HOME/ubuntu-backup.tar.gz && cd /data/data/com.termux/files && tar -czvf /sdcard/Download/termux-native-bocchi.tar.gz ./usr ./home && set -H && echo "✅ Готово! Архив: /sdcard/Download/termux-native-bocchi.tar.gz"
 ```
 
 **⏱️ Время сборки:** 15–30 минут (зависит от скорости интернета и процессора).  
@@ -106,4 +108,4 @@ Termux вернётся в исходное состояние.
 - [Termux](https://github.com/termux/termux-app) (GPLv3)  
 - [proot-distro](https://github.com/termux/proot-distro) (GPLv3)  
 - [yandex-music-downloader](https://github.com/llistochek/yandex-music-downloader) (MIT)  
-- [Bocchi Downloader](https://github.com/YaroslavGrud/Bocchi-Downloader)
+- [Bocchi Downloader](https://github.com/StalkerBocchi/Bocchi-Downloader)

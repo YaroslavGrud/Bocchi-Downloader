@@ -44,7 +44,7 @@
 ### 1. Первый запуск (с полной очисткой)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/deploy.sh -o deploy.sh && bash deploy.sh
+curl -fsSL https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/deploy.sh -o deploy.sh && bash deploy.sh
 ```
 
 Скрипт `deploy.sh`:
@@ -60,7 +60,7 @@ curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaro
 ### 2\. Перезапуск бота
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/restart.sh -o restart.sh && bash restart.sh
+curl -fsSL https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/restart.sh -o restart.sh && bash restart.sh
 ```
 
 Скрипт `restart.sh`:
@@ -77,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaro
 ### 3. Стабильная версия (на данный момент нестабильна (читайте выше)).
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/switch_to_stable.sh -o switch_to_stable.sh && bash switch_to_stable.sh
+curl -fsSL https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/switch_to_stable.sh -o switch_to_stable.sh && bash switch_to_stable.sh
 ```
 
 Скрипт `switch_to_stable.sh`:
@@ -90,7 +90,7 @@ curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaro
 ### 4. Бета-версия
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/switch_to_beta.sh -o switch_to_beta.sh && bash switch_to_beta.sh
+curl -fsSL https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/switch_to_beta.sh -o switch_to_beta.sh && bash switch_to_beta.sh
 ```
 
 Скрипт `switch_to_beta.sh`:
@@ -105,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaro
 ### 5. Полное удаление бота
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YaroslavGrud/Bocchi-Downloader/Yaroslav_grud/docker_clean.sh -o docker_clean.sh && bash docker_clean.sh
+curl -fsSL https://raw.githubusercontent.com/StalkerBocchi/Bocchi-Downloader/main/docker_clean.sh -o docker_clean.sh && bash docker_clean.sh
 ```
 
 Скрипт `docker_clean.sh`:

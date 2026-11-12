@@ -54,6 +54,7 @@ logs/
 .env.local
 .env.*.local
 *.env
+!.env.example
 
 # Project specific data volumes (all persistent and temporary data)
 data/                   # основная папка данных (включает stats.txt, JSON-файлы)
@@ -76,7 +77,7 @@ htmlcov/
 # Temporary files (excluding already listed patterns)
 *.tmp
 *.bak
-*.lock
+*.bak*
 
 # Scripts with local changes (optional)
 *_local.sh
@@ -94,8 +95,4 @@ stats.txt
 download_queue_state.json
 user_tokens.json
 active_status_msgs.json
-pending_tasks.jsonbocchi_dashboard.html.bak
-bocchi_dashboard.html.bak
-Dashboard_Endpoint.py.bak*
-bocchi_dashboard.html.bak*
-bocchi_dashboard.html.bak*
+pending_tasks.json
